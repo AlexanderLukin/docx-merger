@@ -70,7 +70,7 @@ return /******/ (function(modules) { // webpackBootstrap
 /******/ 	__webpack_require__.p = "";
 /******/
 /******/ 	// Load entry module and return exports
-/******/ 	return __webpack_require__(__webpack_require__.s = 52);
+/******/ 	return __webpack_require__(__webpack_require__.s = 24);
 /******/ })
 /************************************************************************/
 /******/ ([
@@ -79,61 +79,39 @@ return /******/ (function(modules) { // webpackBootstrap
 
 "use strict";
 
-
-var support = __webpack_require__(4);
-var base64 = __webpack_require__(30);
-var nodejsUtils = __webpack_require__(15);
-var setImmediate = __webpack_require__(67);
-var external = __webpack_require__(11);
-
-
+var support = __webpack_require__(3);
+var compressions = __webpack_require__(6);
+var nodeBuffer = __webpack_require__(8);
 /**
- * Convert a string that pass as a "binary string": it should represent a byte
- * array but may have > 255 char codes. Be sure to take only the first byte
- * and returns the byte array.
- * @param {String} str the string to transform.
- * @return {Array|Uint8Array} the string in a binary format.
+ * Convert a string to a "binary string" : a string containing only char codes between 0 and 255.
+ * @param {string} str the string to transform.
+ * @return {String} the binary string.
  */
-function string2binary(str) {
-    var result = null;
-    if (support.uint8array) {
-      result = new Uint8Array(str.length);
-    } else {
-      result = new Array(str.length);
+exports.string2binary = function(str) {
+    var result = "";
+    for (var i = 0; i < str.length; i++) {
+        result += String.fromCharCode(str.charCodeAt(i) & 0xff);
     }
-    return stringToArrayLike(str, result);
-}
-
-/**
- * Create a new blob with the given content and the given type.
- * @param {String|ArrayBuffer} part the content to put in the blob. DO NOT use
- * an Uint8Array because the stock browser of android 4 won't accept it (it
- * will be silently converted to a string, "[object Uint8Array]").
- *
- * Use only ONE part to build the blob to avoid a memory leak in IE11 / Edge:
- * when a large amount of Array is used to create the Blob, the amount of
- * memory consumed is nearly 100 times the original data amount.
- *
- * @param {String} type the mime type of the blob.
- * @return {Blob} the created blob.
- */
-exports.newBlob = function(part, type) {
+    return result;
+};
+exports.arrayBuffer2Blob = function(buffer, mimeType) {
     exports.checkSupport("blob");
+	mimeType = mimeType || 'application/zip';
 
     try {
         // Blob constructor
-        return new Blob([part], {
-            type: type
+        return new Blob([buffer], {
+            type: mimeType
         });
     }
     catch (e) {
 
         try {
             // deprecated, browser only, old way
-            var Builder = self.BlobBuilder || self.WebKitBlobBuilder || self.MozBlobBuilder || self.MSBlobBuilder;
+            var Builder = window.BlobBuilder || window.WebKitBlobBuilder || window.MozBlobBuilder || window.MSBlobBuilder;
             var builder = new Builder();
-            builder.append(part);
-            return builder.getBlob(type);
+            builder.append(buffer);
+            return builder.getBlob(mimeType);
         }
         catch (e) {
 
@@ -167,76 +145,6 @@ function stringToArrayLike(str, array) {
 }
 
 /**
- * An helper for the function arrayLikeToString.
- * This contains static informations and functions that
- * can be optimized by the browser JIT compiler.
- */
-var arrayToStringHelper = {
-    /**
-     * Transform an array of int into a string, chunk by chunk.
-     * See the performances notes on arrayLikeToString.
-     * @param {Array|ArrayBuffer|Uint8Array|Buffer} array the array to transform.
-     * @param {String} type the type of the array.
-     * @param {Integer} chunk the chunk size.
-     * @return {String} the resulting string.
-     * @throws Error if the chunk is too big for the stack.
-     */
-    stringifyByChunk: function(array, type, chunk) {
-        var result = [], k = 0, len = array.length;
-        // shortcut
-        if (len <= chunk) {
-            return String.fromCharCode.apply(null, array);
-        }
-        while (k < len) {
-            if (type === "array" || type === "nodebuffer") {
-                result.push(String.fromCharCode.apply(null, array.slice(k, Math.min(k + chunk, len))));
-            }
-            else {
-                result.push(String.fromCharCode.apply(null, array.subarray(k, Math.min(k + chunk, len))));
-            }
-            k += chunk;
-        }
-        return result.join("");
-    },
-    /**
-     * Call String.fromCharCode on every item in the array.
-     * This is the naive implementation, which generate A LOT of intermediate string.
-     * This should be used when everything else fail.
-     * @param {Array|ArrayBuffer|Uint8Array|Buffer} array the array to transform.
-     * @return {String} the result.
-     */
-    stringifyByChar: function(array){
-        var resultStr = "";
-        for(var i = 0; i < array.length; i++) {
-            resultStr += String.fromCharCode(array[i]);
-        }
-        return resultStr;
-    },
-    applyCanBeUsed : {
-        /**
-         * true if the browser accepts to use String.fromCharCode on Uint8Array
-         */
-        uint8array : (function () {
-            try {
-                return support.uint8array && String.fromCharCode.apply(null, new Uint8Array(1)).length === 1;
-            } catch (e) {
-                return false;
-            }
-        })(),
-        /**
-         * true if the browser accepts to use String.fromCharCode on nodejs Buffer.
-         */
-        nodebuffer : (function () {
-            try {
-                return support.nodebuffer && String.fromCharCode.apply(null, nodejsUtils.allocBuffer(1)).length === 1;
-            } catch (e) {
-                return false;
-            }
-        })()
-    }
-};
-
-/**
  * Transform an array-like object to a string.
  * @param {Array|ArrayBuffer|Uint8Array|Buffer} array the array to transform.
  * @return {String} the result.
@@ -251,29 +159,49 @@ function arrayLikeToString(array) {
     // result += String.fromCharCode(array[i]); generate too many strings !
     //
     // This code is inspired by http://jsperf.com/arraybuffer-to-string-apply-performance/2
-    // TODO : we now have workers that split the work. Do we still need that ?
-    var chunk = 65536,
+    var chunk = 65536;
+    var result = [],
+        len = array.length,
         type = exports.getTypeOf(array),
+        k = 0,
         canUseApply = true;
-    if (type === "uint8array") {
-        canUseApply = arrayToStringHelper.applyCanBeUsed.uint8array;
-    } else if (type === "nodebuffer") {
-        canUseApply = arrayToStringHelper.applyCanBeUsed.nodebuffer;
-    }
+      try {
+         switch(type) {
+            case "uint8array":
+               String.fromCharCode.apply(null, new Uint8Array(0));
+               break;
+            case "nodebuffer":
+               String.fromCharCode.apply(null, nodeBuffer(0));
+               break;
+         }
+      } catch(e) {
+         canUseApply = false;
+      }
 
-    if (canUseApply) {
-        while (chunk > 1) {
-            try {
-                return arrayToStringHelper.stringifyByChunk(array, type, chunk);
-            } catch (e) {
-                chunk = Math.floor(chunk / 2);
+      // no apply : slow and painful algorithm
+      // default browser on android 4.*
+      if (!canUseApply) {
+         var resultStr = "";
+         for(var i = 0; i < array.length;i++) {
+            resultStr += String.fromCharCode(array[i]);
+         }
+    return resultStr;
+    }
+    while (k < len && chunk > 1) {
+        try {
+            if (type === "array" || type === "nodebuffer") {
+                result.push(String.fromCharCode.apply(null, array.slice(k, Math.min(k + chunk, len))));
             }
+            else {
+                result.push(String.fromCharCode.apply(null, array.subarray(k, Math.min(k + chunk, len))));
+            }
+            k += chunk;
+        }
+        catch (e) {
+            chunk = Math.floor(chunk / 2);
         }
     }
-
-    // no apply or chunk error : slow and painful algorithm
-    // default browser on android 4.*
-    return arrayToStringHelper.stringifyByChar(array);
+    return result.join("");
 }
 
 exports.applyFromCharCode = arrayLikeToString;
@@ -308,7 +236,7 @@ transform["string"] = {
         return stringToArrayLike(input, new Uint8Array(input.length));
     },
     "nodebuffer": function(input) {
-        return stringToArrayLike(input, nodejsUtils.allocBuffer(input.length));
+        return stringToArrayLike(input, nodeBuffer(input.length));
     }
 };
 
@@ -323,7 +251,7 @@ transform["array"] = {
         return new Uint8Array(input);
     },
     "nodebuffer": function(input) {
-        return nodejsUtils.newBufferFrom(input);
+        return nodeBuffer(input);
     }
 };
 
@@ -340,7 +268,7 @@ transform["arraybuffer"] = {
         return new Uint8Array(input);
     },
     "nodebuffer": function(input) {
-        return nodejsUtils.newBufferFrom(new Uint8Array(input));
+        return nodeBuffer(new Uint8Array(input));
     }
 };
 
@@ -355,7 +283,7 @@ transform["uint8array"] = {
     },
     "uint8array": identity,
     "nodebuffer": function(input) {
-        return nodejsUtils.newBufferFrom(input);
+        return nodeBuffer(input);
     }
 };
 
@@ -410,7 +338,7 @@ exports.getTypeOf = function(input) {
     if (Object.prototype.toString.call(input) === "[object Array]") {
         return "array";
     }
-    if (support.nodebuffer && nodejsUtils.isBuffer(input)) {
+    if (support.nodebuffer && nodeBuffer.test(input)) {
         return "nodebuffer";
     }
     if (support.uint8array && input instanceof Uint8Array) {
@@ -429,10 +357,9 @@ exports.getTypeOf = function(input) {
 exports.checkSupport = function(type) {
     var supported = support[type.toLowerCase()];
     if (!supported) {
-        throw new Error(type + " is not supported by this platform");
+        throw new Error(type + " is not supported by this browser");
     }
 };
-
 exports.MAX_VALUE_16BITS = 65535;
 exports.MAX_VALUE_32BITS = -1; // well, "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF" is parsed as -1
 
@@ -452,26 +379,29 @@ exports.pretty = function(str) {
 };
 
 /**
- * Defer the call of a function.
- * @param {Function} callback the function to call asynchronously.
- * @param {Array} args the arguments to give to the callback.
+ * Find a compression registered in JSZip.
+ * @param {string} compressionMethod the method magic to find.
+ * @return {Object|null} the JSZip compression object, null if none found.
  */
-exports.delay = function(callback, args, self) {
-    setImmediate(function () {
-        callback.apply(self || null, args || []);
-    });
+exports.findCompression = function(compressionMethod) {
+    for (var method in compressions) {
+        if (!compressions.hasOwnProperty(method)) {
+            continue;
+        }
+        if (compressions[method].magic === compressionMethod) {
+            return compressions[method];
+        }
+    }
+    return null;
 };
-
 /**
- * Extends a prototype with an other, without calling a constructor with
- * side effects. Inspired by nodejs' `utils.inherits`
- * @param {Function} ctor the constructor to augment
- * @param {Function} superCtor the parent constructor to use
- */
-exports.inherits = function (ctor, superCtor) {
-    var Obj = function() {};
-    Obj.prototype = superCtor.prototype;
-    ctor.prototype = new Obj();
+* Cross-window, cross-Node-context regular expression detection
+* @param  {Object}  object Anything
+* @return {Boolean}        true if the object is a regular expression,
+* false otherwise
+*/
+exports.isRegExp = function (object) {
+    return Object.prototype.toString.call(object) === "[object RegExp]";
 };
 
 /**
@@ -492,342 +422,10 @@ exports.extend = function() {
     return result;
 };
 
-/**
- * Transform arbitrary content into a Promise.
- * @param {String} name a name for the content being processed.
- * @param {Object} inputData the content to process.
- * @param {Boolean} isBinary true if the content is not an unicode string
- * @param {Boolean} isOptimizedBinaryString true if the string content only has one byte per character.
- * @param {Boolean} isBase64 true if the string content is encoded with base64.
- * @return {Promise} a promise in a format usable by JSZip.
- */
-exports.prepareContent = function(name, inputData, isBinary, isOptimizedBinaryString, isBase64) {
-
-    // if inputData is already a promise, this flatten it.
-    var promise = external.Promise.resolve(inputData).then(function(data) {
-        
-        
-        var isBlob = support.blob && (data instanceof Blob || ['[object File]', '[object Blob]'].indexOf(Object.prototype.toString.call(data)) !== -1);
-
-        if (isBlob && typeof FileReader !== "undefined") {
-            return new external.Promise(function (resolve, reject) {
-                var reader = new FileReader();
-
-                reader.onload = function(e) {
-                    resolve(e.target.result);
-                };
-                reader.onerror = function(e) {
-                    reject(e.target.error);
-                };
-                reader.readAsArrayBuffer(data);
-            });
-        } else {
-            return data;
-        }
-    });
-
-    return promise.then(function(data) {
-        var dataType = exports.getTypeOf(data);
-
-        if (!dataType) {
-            return external.Promise.reject(
-                new Error("Can't read the data of '" + name + "'. Is it " +
-                          "in a supported JavaScript type (String, Blob, ArrayBuffer, etc) ?")
-            );
-        }
-        // special case : it's way easier to work with Uint8Array than with ArrayBuffer
-        if (dataType === "arraybuffer") {
-            data = exports.transformTo("uint8array", data);
-        } else if (dataType === "string") {
-            if (isBase64) {
-                data = base64.decode(data);
-            }
-            else if (isBinary) {
-                // optimizedBinaryString === true means that the file has already been filtered with a 0xFF mask
-                if (isOptimizedBinaryString !== true) {
-                    // this is a string, not in a base64 format.
-                    // Be sure that this is a correct "binary string"
-                    data = string2binary(data);
-                }
-            }
-        }
-        return data;
-    });
-};
 
 
 /***/ }),
 /* 1 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-/**
- * A worker that does nothing but passing chunks to the next one. This is like
- * a nodejs stream but with some differences. On the good side :
- * - it works on IE 6-9 without any issue / polyfill
- * - it weights less than the full dependencies bundled with browserify
- * - it forwards errors (no need to declare an error handler EVERYWHERE)
- *
- * A chunk is an object with 2 attributes : `meta` and `data`. The former is an
- * object containing anything (`percent` for example), see each worker for more
- * details. The latter is the real data (String, Uint8Array, etc).
- *
- * @constructor
- * @param {String} name the name of the stream (mainly used for debugging purposes)
- */
-function GenericWorker(name) {
-    // the name of the worker
-    this.name = name || "default";
-    // an object containing metadata about the workers chain
-    this.streamInfo = {};
-    // an error which happened when the worker was paused
-    this.generatedError = null;
-    // an object containing metadata to be merged by this worker into the general metadata
-    this.extraStreamInfo = {};
-    // true if the stream is paused (and should not do anything), false otherwise
-    this.isPaused = true;
-    // true if the stream is finished (and should not do anything), false otherwise
-    this.isFinished = false;
-    // true if the stream is locked to prevent further structure updates (pipe), false otherwise
-    this.isLocked = false;
-    // the event listeners
-    this._listeners = {
-        'data':[],
-        'end':[],
-        'error':[]
-    };
-    // the previous worker, if any
-    this.previous = null;
-}
-
-GenericWorker.prototype = {
-    /**
-     * Push a chunk to the next workers.
-     * @param {Object} chunk the chunk to push
-     */
-    push : function (chunk) {
-        this.emit("data", chunk);
-    },
-    /**
-     * End the stream.
-     * @return {Boolean} true if this call ended the worker, false otherwise.
-     */
-    end : function () {
-        if (this.isFinished) {
-            return false;
-        }
-
-        this.flush();
-        try {
-            this.emit("end");
-            this.cleanUp();
-            this.isFinished = true;
-        } catch (e) {
-            this.emit("error", e);
-        }
-        return true;
-    },
-    /**
-     * End the stream with an error.
-     * @param {Error} e the error which caused the premature end.
-     * @return {Boolean} true if this call ended the worker with an error, false otherwise.
-     */
-    error : function (e) {
-        if (this.isFinished) {
-            return false;
-        }
-
-        if(this.isPaused) {
-            this.generatedError = e;
-        } else {
-            this.isFinished = true;
-
-            this.emit("error", e);
-
-            // in the workers chain exploded in the middle of the chain,
-            // the error event will go downward but we also need to notify
-            // workers upward that there has been an error.
-            if(this.previous) {
-                this.previous.error(e);
-            }
-
-            this.cleanUp();
-        }
-        return true;
-    },
-    /**
-     * Add a callback on an event.
-     * @param {String} name the name of the event (data, end, error)
-     * @param {Function} listener the function to call when the event is triggered
-     * @return {GenericWorker} the current object for chainability
-     */
-    on : function (name, listener) {
-        this._listeners[name].push(listener);
-        return this;
-    },
-    /**
-     * Clean any references when a worker is ending.
-     */
-    cleanUp : function () {
-        this.streamInfo = this.generatedError = this.extraStreamInfo = null;
-        this._listeners = [];
-    },
-    /**
-     * Trigger an event. This will call registered callback with the provided arg.
-     * @param {String} name the name of the event (data, end, error)
-     * @param {Object} arg the argument to call the callback with.
-     */
-    emit : function (name, arg) {
-        if (this._listeners[name]) {
-            for(var i = 0; i < this._listeners[name].length; i++) {
-                this._listeners[name][i].call(this, arg);
-            }
-        }
-    },
-    /**
-     * Chain a worker with an other.
-     * @param {Worker} next the worker receiving events from the current one.
-     * @return {worker} the next worker for chainability
-     */
-    pipe : function (next) {
-        return next.registerPrevious(this);
-    },
-    /**
-     * Same as `pipe` in the other direction.
-     * Using an API with `pipe(next)` is very easy.
-     * Implementing the API with the point of view of the next one registering
-     * a source is easier, see the ZipFileWorker.
-     * @param {Worker} previous the previous worker, sending events to this one
-     * @return {Worker} the current worker for chainability
-     */
-    registerPrevious : function (previous) {
-        if (this.isLocked) {
-            throw new Error("The stream '" + this + "' has already been used.");
-        }
-
-        // sharing the streamInfo...
-        this.streamInfo = previous.streamInfo;
-        // ... and adding our own bits
-        this.mergeStreamInfo();
-        this.previous =  previous;
-        var self = this;
-        previous.on('data', function (chunk) {
-            self.processChunk(chunk);
-        });
-        previous.on('end', function () {
-            self.end();
-        });
-        previous.on('error', function (e) {
-            self.error(e);
-        });
-        return this;
-    },
-    /**
-     * Pause the stream so it doesn't send events anymore.
-     * @return {Boolean} true if this call paused the worker, false otherwise.
-     */
-    pause : function () {
-        if(this.isPaused || this.isFinished) {
-            return false;
-        }
-        this.isPaused = true;
-
-        if(this.previous) {
-            this.previous.pause();
-        }
-        return true;
-    },
-    /**
-     * Resume a paused stream.
-     * @return {Boolean} true if this call resumed the worker, false otherwise.
-     */
-    resume : function () {
-        if(!this.isPaused || this.isFinished) {
-            return false;
-        }
-        this.isPaused = false;
-
-        // if true, the worker tried to resume but failed
-        var withError = false;
-        if(this.generatedError) {
-            this.error(this.generatedError);
-            withError = true;
-        }
-        if(this.previous) {
-            this.previous.resume();
-        }
-
-        return !withError;
-    },
-    /**
-     * Flush any remaining bytes as the stream is ending.
-     */
-    flush : function () {},
-    /**
-     * Process a chunk. This is usually the method overridden.
-     * @param {Object} chunk the chunk to process.
-     */
-    processChunk : function(chunk) {
-        this.push(chunk);
-    },
-    /**
-     * Add a key/value to be added in the workers chain streamInfo once activated.
-     * @param {String} key the key to use
-     * @param {Object} value the associated value
-     * @return {Worker} the current worker for chainability
-     */
-    withStreamInfo : function (key, value) {
-        this.extraStreamInfo[key] = value;
-        this.mergeStreamInfo();
-        return this;
-    },
-    /**
-     * Merge this worker's streamInfo into the chain's streamInfo.
-     */
-    mergeStreamInfo : function () {
-        for(var key in this.extraStreamInfo) {
-            if (!this.extraStreamInfo.hasOwnProperty(key)) {
-                continue;
-            }
-            this.streamInfo[key] = this.extraStreamInfo[key];
-        }
-    },
-
-    /**
-     * Lock the stream to prevent further updates on the workers chain.
-     * After calling this method, all calls to pipe will fail.
-     */
-    lock: function () {
-        if (this.isLocked) {
-            throw new Error("The stream '" + this + "' has already been used.");
-        }
-        this.isLocked = true;
-        if (this.previous) {
-            this.previous.lock();
-        }
-    },
-
-    /**
-     *
-     * Pretty print the workers chain.
-     */
-    toString : function () {
-        var me = "Worker " + this.name;
-        if (this.previous) {
-            return this.previous + " -> " + me;
-        } else {
-            return me;
-        }
-    }
-};
-
-module.exports = GenericWorker;
-
-
-/***/ }),
-/* 2 */
 /***/ (function(module, exports, __webpack_require__) {
 
 function DOMParser(options){
@@ -1076,15 +674,1197 @@ function appendElement (hander,node) {
 }//appendChild and setAttributeNS are preformance key
 
 //if(typeof require == 'function'){
-	var XMLReader = __webpack_require__(104).XMLReader;
-	var DOMImplementation = exports.DOMImplementation = __webpack_require__(51).DOMImplementation;
-	exports.XMLSerializer = __webpack_require__(51).XMLSerializer ;
+	var XMLReader = __webpack_require__(48).XMLReader;
+	var DOMImplementation = exports.DOMImplementation = __webpack_require__(23).DOMImplementation;
+	exports.XMLSerializer = __webpack_require__(23).XMLSerializer ;
 	exports.DOMParser = DOMParser;
 //}
 
 
 /***/ }),
+/* 2 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+
+var TYPED_OK =  (typeof Uint8Array !== 'undefined') &&
+                (typeof Uint16Array !== 'undefined') &&
+                (typeof Int32Array !== 'undefined');
+
+function _has(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+exports.assign = function (obj /*from1, from2, from3, ...*/) {
+  var sources = Array.prototype.slice.call(arguments, 1);
+  while (sources.length) {
+    var source = sources.shift();
+    if (!source) { continue; }
+
+    if (typeof source !== 'object') {
+      throw new TypeError(source + 'must be non-object');
+    }
+
+    for (var p in source) {
+      if (_has(source, p)) {
+        obj[p] = source[p];
+      }
+    }
+  }
+
+  return obj;
+};
+
+
+// reduce buffer size, avoiding mem copy
+exports.shrinkBuf = function (buf, size) {
+  if (buf.length === size) { return buf; }
+  if (buf.subarray) { return buf.subarray(0, size); }
+  buf.length = size;
+  return buf;
+};
+
+
+var fnTyped = {
+  arraySet: function (dest, src, src_offs, len, dest_offs) {
+    if (src.subarray && dest.subarray) {
+      dest.set(src.subarray(src_offs, src_offs + len), dest_offs);
+      return;
+    }
+    // Fallback to ordinary array
+    for (var i = 0; i < len; i++) {
+      dest[dest_offs + i] = src[src_offs + i];
+    }
+  },
+  // Join array of chunks to single array.
+  flattenChunks: function (chunks) {
+    var i, l, len, pos, chunk, result;
+
+    // calculate data length
+    len = 0;
+    for (i = 0, l = chunks.length; i < l; i++) {
+      len += chunks[i].length;
+    }
+
+    // join chunks
+    result = new Uint8Array(len);
+    pos = 0;
+    for (i = 0, l = chunks.length; i < l; i++) {
+      chunk = chunks[i];
+      result.set(chunk, pos);
+      pos += chunk.length;
+    }
+
+    return result;
+  }
+};
+
+var fnUntyped = {
+  arraySet: function (dest, src, src_offs, len, dest_offs) {
+    for (var i = 0; i < len; i++) {
+      dest[dest_offs + i] = src[src_offs + i];
+    }
+  },
+  // Join array of chunks to single array.
+  flattenChunks: function (chunks) {
+    return [].concat.apply([], chunks);
+  }
+};
+
+
+// Enable/Disable typed arrays use, for testing
+//
+exports.setTyped = function (on) {
+  if (on) {
+    exports.Buf8  = Uint8Array;
+    exports.Buf16 = Uint16Array;
+    exports.Buf32 = Int32Array;
+    exports.assign(exports, fnTyped);
+  } else {
+    exports.Buf8  = Array;
+    exports.Buf16 = Array;
+    exports.Buf32 = Array;
+    exports.assign(exports, fnUntyped);
+  }
+};
+
+exports.setTyped(TYPED_OK);
+
+
+/***/ }),
 /* 3 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+/* WEBPACK VAR INJECTION */(function(Buffer) {
+exports.base64 = true;
+exports.array = true;
+exports.string = true;
+exports.arraybuffer = typeof ArrayBuffer !== "undefined" && typeof Uint8Array !== "undefined";
+// contains true if JSZip can read/generate nodejs Buffer, false otherwise.
+// Browserify will provide a Buffer implementation for browsers, which is
+// an augmented Uint8Array (i.e., can be used as either Buffer or U8).
+exports.nodebuffer = typeof Buffer !== "undefined";
+// contains true if JSZip can read/generate Uint8Array, false otherwise.
+exports.uint8array = typeof Uint8Array !== "undefined";
+
+if (typeof ArrayBuffer === "undefined") {
+    exports.blob = false;
+}
+else {
+    var buffer = new ArrayBuffer(0);
+    try {
+        exports.blob = new Blob([buffer], {
+            type: "application/zip"
+        }).size === 0;
+    }
+    catch (e) {
+        try {
+            var Builder = window.BlobBuilder || window.WebKitBlobBuilder || window.MozBlobBuilder || window.MSBlobBuilder;
+            var builder = new Builder();
+            builder.append(buffer);
+            exports.blob = builder.getBlob('application/zip').size === 0;
+        }
+        catch (e) {
+            exports.blob = false;
+        }
+    }
+}
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9).Buffer))
+
+/***/ }),
+/* 4 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+// private property
+var _keyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+
+
+// public method for encoding
+exports.encode = function(input, utf8) {
+    var output = "";
+    var chr1, chr2, chr3, enc1, enc2, enc3, enc4;
+    var i = 0;
+
+    while (i < input.length) {
+
+        chr1 = input.charCodeAt(i++);
+        chr2 = input.charCodeAt(i++);
+        chr3 = input.charCodeAt(i++);
+
+        enc1 = chr1 >> 2;
+        enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
+        enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
+        enc4 = chr3 & 63;
+
+        if (isNaN(chr2)) {
+            enc3 = enc4 = 64;
+        }
+        else if (isNaN(chr3)) {
+            enc4 = 64;
+        }
+
+        output = output + _keyStr.charAt(enc1) + _keyStr.charAt(enc2) + _keyStr.charAt(enc3) + _keyStr.charAt(enc4);
+
+    }
+
+    return output;
+};
+
+// public method for decoding
+exports.decode = function(input, utf8) {
+    var output = "";
+    var chr1, chr2, chr3;
+    var enc1, enc2, enc3, enc4;
+    var i = 0;
+
+    input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
+
+    while (i < input.length) {
+
+        enc1 = _keyStr.indexOf(input.charAt(i++));
+        enc2 = _keyStr.indexOf(input.charAt(i++));
+        enc3 = _keyStr.indexOf(input.charAt(i++));
+        enc4 = _keyStr.indexOf(input.charAt(i++));
+
+        chr1 = (enc1 << 2) | (enc2 >> 4);
+        chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+        chr3 = ((enc3 & 3) << 6) | enc4;
+
+        output = output + String.fromCharCode(chr1);
+
+        if (enc3 != 64) {
+            output = output + String.fromCharCode(chr2);
+        }
+        if (enc4 != 64) {
+            output = output + String.fromCharCode(chr3);
+        }
+
+    }
+
+    return output;
+
+};
+
+
+/***/ }),
+/* 5 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var support = __webpack_require__(3);
+var utils = __webpack_require__(0);
+var crc32 = __webpack_require__(40);
+var signature = __webpack_require__(15);
+var defaults = __webpack_require__(16);
+var base64 = __webpack_require__(4);
+var compressions = __webpack_require__(6);
+var CompressedObject = __webpack_require__(17);
+var nodeBuffer = __webpack_require__(8);
+var utf8 = __webpack_require__(18);
+var StringWriter = __webpack_require__(41);
+var Uint8ArrayWriter = __webpack_require__(42);
+
+/**
+ * Returns the raw data of a ZipObject, decompress the content if necessary.
+ * @param {ZipObject} file the file to use.
+ * @return {String|ArrayBuffer|Uint8Array|Buffer} the data.
+ */
+var getRawData = function(file) {
+    if (file._data instanceof CompressedObject) {
+        file._data = file._data.getContent();
+        file.options.binary = true;
+        file.options.base64 = false;
+
+        if (utils.getTypeOf(file._data) === "uint8array") {
+            var copy = file._data;
+            // when reading an arraybuffer, the CompressedObject mechanism will keep it and subarray() a Uint8Array.
+            // if we request a file in the same format, we might get the same Uint8Array or its ArrayBuffer (the original zip file).
+            file._data = new Uint8Array(copy.length);
+            // with an empty Uint8Array, Opera fails with a "Offset larger than array size"
+            if (copy.length !== 0) {
+                file._data.set(copy, 0);
+            }
+        }
+    }
+    return file._data;
+};
+
+/**
+ * Returns the data of a ZipObject in a binary form. If the content is an unicode string, encode it.
+ * @param {ZipObject} file the file to use.
+ * @return {String|ArrayBuffer|Uint8Array|Buffer} the data.
+ */
+var getBinaryData = function(file) {
+    var result = getRawData(file),
+        type = utils.getTypeOf(result);
+    if (type === "string") {
+        if (!file.options.binary) {
+            // unicode text !
+            // unicode string => binary string is a painful process, check if we can avoid it.
+            if (support.nodebuffer) {
+                return nodeBuffer(result, "utf-8");
+            }
+        }
+        return file.asBinary();
+    }
+    return result;
+};
+
+/**
+ * Transform this._data into a string.
+ * @param {function} filter a function String -> String, applied if not null on the result.
+ * @return {String} the string representing this._data.
+ */
+var dataToString = function(asUTF8) {
+    var result = getRawData(this);
+    if (result === null || typeof result === "undefined") {
+        return "";
+    }
+    // if the data is a base64 string, we decode it before checking the encoding !
+    if (this.options.base64) {
+        result = base64.decode(result);
+    }
+    if (asUTF8 && this.options.binary) {
+        // JSZip.prototype.utf8decode supports arrays as input
+        // skip to array => string step, utf8decode will do it.
+        result = out.utf8decode(result);
+    }
+    else {
+        // no utf8 transformation, do the array => string step.
+        result = utils.transformTo("string", result);
+    }
+
+    if (!asUTF8 && !this.options.binary) {
+        result = utils.transformTo("string", out.utf8encode(result));
+    }
+    return result;
+};
+/**
+ * A simple object representing a file in the zip file.
+ * @constructor
+ * @param {string} name the name of the file
+ * @param {String|ArrayBuffer|Uint8Array|Buffer} data the data
+ * @param {Object} options the options of the file
+ */
+var ZipObject = function(name, data, options) {
+    this.name = name;
+    this.dir = options.dir;
+    this.date = options.date;
+    this.comment = options.comment;
+    this.unixPermissions = options.unixPermissions;
+    this.dosPermissions = options.dosPermissions;
+
+    this._data = data;
+    this.options = options;
+
+    /*
+     * This object contains initial values for dir and date.
+     * With them, we can check if the user changed the deprecated metadata in
+     * `ZipObject#options` or not.
+     */
+    this._initialMetadata = {
+      dir : options.dir,
+      date : options.date
+    };
+};
+
+ZipObject.prototype = {
+    /**
+     * Return the content as UTF8 string.
+     * @return {string} the UTF8 string.
+     */
+    asText: function() {
+        return dataToString.call(this, true);
+    },
+    /**
+     * Returns the binary content.
+     * @return {string} the content as binary.
+     */
+    asBinary: function() {
+        return dataToString.call(this, false);
+    },
+    /**
+     * Returns the content as a nodejs Buffer.
+     * @return {Buffer} the content as a Buffer.
+     */
+    asNodeBuffer: function() {
+        var result = getBinaryData(this);
+        return utils.transformTo("nodebuffer", result);
+    },
+    /**
+     * Returns the content as an Uint8Array.
+     * @return {Uint8Array} the content as an Uint8Array.
+     */
+    asUint8Array: function() {
+        var result = getBinaryData(this);
+        return utils.transformTo("uint8array", result);
+    },
+    /**
+     * Returns the content as an ArrayBuffer.
+     * @return {ArrayBuffer} the content as an ArrayBufer.
+     */
+    asArrayBuffer: function() {
+        return this.asUint8Array().buffer;
+    }
+};
+
+/**
+ * Transform an integer into a string in hexadecimal.
+ * @private
+ * @param {number} dec the number to convert.
+ * @param {number} bytes the number of bytes to generate.
+ * @returns {string} the result.
+ */
+var decToHex = function(dec, bytes) {
+    var hex = "",
+        i;
+    for (i = 0; i < bytes; i++) {
+        hex += String.fromCharCode(dec & 0xff);
+        dec = dec >>> 8;
+    }
+    return hex;
+};
+
+/**
+ * Transforms the (incomplete) options from the user into the complete
+ * set of options to create a file.
+ * @private
+ * @param {Object} o the options from the user.
+ * @return {Object} the complete set of options.
+ */
+var prepareFileAttrs = function(o) {
+    o = o || {};
+    if (o.base64 === true && (o.binary === null || o.binary === undefined)) {
+        o.binary = true;
+    }
+    o = utils.extend(o, defaults);
+    o.date = o.date || new Date();
+    if (o.compression !== null) o.compression = o.compression.toUpperCase();
+
+    return o;
+};
+
+/**
+ * Add a file in the current folder.
+ * @private
+ * @param {string} name the name of the file
+ * @param {String|ArrayBuffer|Uint8Array|Buffer} data the data of the file
+ * @param {Object} o the options of the file
+ * @return {Object} the new file.
+ */
+var fileAdd = function(name, data, o) {
+    // be sure sub folders exist
+    var dataType = utils.getTypeOf(data),
+        parent;
+
+    o = prepareFileAttrs(o);
+
+    if (typeof o.unixPermissions === "string") {
+        o.unixPermissions = parseInt(o.unixPermissions, 8);
+    }
+
+    // UNX_IFDIR  0040000 see zipinfo.c
+    if (o.unixPermissions && (o.unixPermissions & 0x4000)) {
+        o.dir = true;
+    }
+    // Bit 4    Directory
+    if (o.dosPermissions && (o.dosPermissions & 0x0010)) {
+        o.dir = true;
+    }
+
+    if (o.dir) {
+        name = forceTrailingSlash(name);
+    }
+
+    if (o.createFolders && (parent = parentFolder(name))) {
+        folderAdd.call(this, parent, true);
+    }
+
+    if (o.dir || data === null || typeof data === "undefined") {
+        o.base64 = false;
+        o.binary = false;
+        data = null;
+        dataType = null;
+    }
+    else if (dataType === "string") {
+        if (o.binary && !o.base64) {
+            // optimizedBinaryString == true means that the file has already been filtered with a 0xFF mask
+            if (o.optimizedBinaryString !== true) {
+                // this is a string, not in a base64 format.
+                // Be sure that this is a correct "binary string"
+                data = utils.string2binary(data);
+            }
+        }
+    }
+    else { // arraybuffer, uint8array, ...
+        o.base64 = false;
+        o.binary = true;
+
+        if (!dataType && !(data instanceof CompressedObject)) {
+            throw new Error("The data of '" + name + "' is in an unsupported format !");
+        }
+
+        // special case : it's way easier to work with Uint8Array than with ArrayBuffer
+        if (dataType === "arraybuffer") {
+            data = utils.transformTo("uint8array", data);
+        }
+    }
+
+    var object = new ZipObject(name, data, o);
+    this.files[name] = object;
+    return object;
+};
+
+/**
+ * Find the parent folder of the path.
+ * @private
+ * @param {string} path the path to use
+ * @return {string} the parent folder, or ""
+ */
+var parentFolder = function (path) {
+    if (path.slice(-1) == '/') {
+        path = path.substring(0, path.length - 1);
+    }
+    var lastSlash = path.lastIndexOf('/');
+    return (lastSlash > 0) ? path.substring(0, lastSlash) : "";
+};
+
+
+/**
+ * Returns the path with a slash at the end.
+ * @private
+ * @param {String} path the path to check.
+ * @return {String} the path with a trailing slash.
+ */
+var forceTrailingSlash = function(path) {
+    // Check the name ends with a /
+    if (path.slice(-1) != "/") {
+        path += "/"; // IE doesn't like substr(-1)
+    }
+    return path;
+};
+/**
+ * Add a (sub) folder in the current folder.
+ * @private
+ * @param {string} name the folder's name
+ * @param {boolean=} [createFolders] If true, automatically create sub
+ *  folders. Defaults to false.
+ * @return {Object} the new folder.
+ */
+var folderAdd = function(name, createFolders) {
+    createFolders = (typeof createFolders !== 'undefined') ? createFolders : false;
+
+    name = forceTrailingSlash(name);
+
+    // Does this folder already exist?
+    if (!this.files[name]) {
+        fileAdd.call(this, name, null, {
+            dir: true,
+            createFolders: createFolders
+        });
+    }
+    return this.files[name];
+};
+
+/**
+ * Generate a JSZip.CompressedObject for a given zipOject.
+ * @param {ZipObject} file the object to read.
+ * @param {JSZip.compression} compression the compression to use.
+ * @param {Object} compressionOptions the options to use when compressing.
+ * @return {JSZip.CompressedObject} the compressed result.
+ */
+var generateCompressedObjectFrom = function(file, compression, compressionOptions) {
+    var result = new CompressedObject(),
+        content;
+
+    // the data has not been decompressed, we might reuse things !
+    if (file._data instanceof CompressedObject) {
+        result.uncompressedSize = file._data.uncompressedSize;
+        result.crc32 = file._data.crc32;
+
+        if (result.uncompressedSize === 0 || file.dir) {
+            compression = compressions['STORE'];
+            result.compressedContent = "";
+            result.crc32 = 0;
+        }
+        else if (file._data.compressionMethod === compression.magic) {
+            result.compressedContent = file._data.getCompressedContent();
+        }
+        else {
+            content = file._data.getContent();
+            // need to decompress / recompress
+            result.compressedContent = compression.compress(utils.transformTo(compression.compressInputType, content), compressionOptions);
+        }
+    }
+    else {
+        // have uncompressed data
+        content = getBinaryData(file);
+        if (!content || content.length === 0 || file.dir) {
+            compression = compressions['STORE'];
+            content = "";
+        }
+        result.uncompressedSize = content.length;
+        result.crc32 = crc32(content);
+        result.compressedContent = compression.compress(utils.transformTo(compression.compressInputType, content), compressionOptions);
+    }
+
+    result.compressedSize = result.compressedContent.length;
+    result.compressionMethod = compression.magic;
+
+    return result;
+};
+
+
+
+
+/**
+ * Generate the UNIX part of the external file attributes.
+ * @param {Object} unixPermissions the unix permissions or null.
+ * @param {Boolean} isDir true if the entry is a directory, false otherwise.
+ * @return {Number} a 32 bit integer.
+ *
+ * adapted from http://unix.stackexchange.com/questions/14705/the-zip-formats-external-file-attribute :
+ *
+ * TTTTsstrwxrwxrwx0000000000ADVSHR
+ * ^^^^____________________________ file type, see zipinfo.c (UNX_*)
+ *     ^^^_________________________ setuid, setgid, sticky
+ *        ^^^^^^^^^________________ permissions
+ *                 ^^^^^^^^^^______ not used ?
+ *                           ^^^^^^ DOS attribute bits : Archive, Directory, Volume label, System file, Hidden, Read only
+ */
+var generateUnixExternalFileAttr = function (unixPermissions, isDir) {
+
+    var result = unixPermissions;
+    if (!unixPermissions) {
+        // I can't use octal values in strict mode, hence the hexa.
+        //  040775 => 0x41fd
+        // 0100664 => 0x81b4
+        result = isDir ? 0x41fd : 0x81b4;
+    }
+
+    return (result & 0xFFFF) << 16;
+};
+
+/**
+ * Generate the DOS part of the external file attributes.
+ * @param {Object} dosPermissions the dos permissions or null.
+ * @param {Boolean} isDir true if the entry is a directory, false otherwise.
+ * @return {Number} a 32 bit integer.
+ *
+ * Bit 0     Read-Only
+ * Bit 1     Hidden
+ * Bit 2     System
+ * Bit 3     Volume Label
+ * Bit 4     Directory
+ * Bit 5     Archive
+ */
+var generateDosExternalFileAttr = function (dosPermissions, isDir) {
+
+    // the dir flag is already set for compatibility
+
+    return (dosPermissions || 0)  & 0x3F;
+};
+
+/**
+ * Generate the various parts used in the construction of the final zip file.
+ * @param {string} name the file name.
+ * @param {ZipObject} file the file content.
+ * @param {JSZip.CompressedObject} compressedObject the compressed object.
+ * @param {number} offset the current offset from the start of the zip file.
+ * @param {String} platform let's pretend we are this platform (change platform dependents fields)
+ * @param {Function} encodeFileName the function to encode the file name / comment.
+ * @return {object} the zip parts.
+ */
+var generateZipParts = function(name, file, compressedObject, offset, platform, encodeFileName) {
+    var data = compressedObject.compressedContent,
+        useCustomEncoding = encodeFileName !== utf8.utf8encode,
+        encodedFileName = utils.transformTo("string", encodeFileName(file.name)),
+        utfEncodedFileName = utils.transformTo("string", utf8.utf8encode(file.name)),
+        comment = file.comment || "",
+        encodedComment = utils.transformTo("string", encodeFileName(comment)),
+        utfEncodedComment = utils.transformTo("string", utf8.utf8encode(comment)),
+        useUTF8ForFileName = utfEncodedFileName.length !== file.name.length,
+        useUTF8ForComment = utfEncodedComment.length !== comment.length,
+        o = file.options,
+        dosTime,
+        dosDate,
+        extraFields = "",
+        unicodePathExtraField = "",
+        unicodeCommentExtraField = "",
+        dir, date;
+
+
+    // handle the deprecated options.dir
+    if (file._initialMetadata.dir !== file.dir) {
+        dir = file.dir;
+    } else {
+        dir = o.dir;
+    }
+
+    // handle the deprecated options.date
+    if(file._initialMetadata.date !== file.date) {
+        date = file.date;
+    } else {
+        date = o.date;
+    }
+
+    var extFileAttr = 0;
+    var versionMadeBy = 0;
+    if (dir) {
+        // dos or unix, we set the dos dir flag
+        extFileAttr |= 0x00010;
+    }
+    if(platform === "UNIX") {
+        versionMadeBy = 0x031E; // UNIX, version 3.0
+        extFileAttr |= generateUnixExternalFileAttr(file.unixPermissions, dir);
+    } else { // DOS or other, fallback to DOS
+        versionMadeBy = 0x0014; // DOS, version 2.0
+        extFileAttr |= generateDosExternalFileAttr(file.dosPermissions, dir);
+    }
+
+    // date
+    // @see http://www.delorie.com/djgpp/doc/rbinter/it/52/13.html
+    // @see http://www.delorie.com/djgpp/doc/rbinter/it/65/16.html
+    // @see http://www.delorie.com/djgpp/doc/rbinter/it/66/16.html
+
+    dosTime = date.getHours();
+    dosTime = dosTime << 6;
+    dosTime = dosTime | date.getMinutes();
+    dosTime = dosTime << 5;
+    dosTime = dosTime | date.getSeconds() / 2;
+
+    dosDate = date.getFullYear() - 1980;
+    dosDate = dosDate << 4;
+    dosDate = dosDate | (date.getMonth() + 1);
+    dosDate = dosDate << 5;
+    dosDate = dosDate | date.getDate();
+
+    if (useUTF8ForFileName) {
+        // set the unicode path extra field. unzip needs at least one extra
+        // field to correctly handle unicode path, so using the path is as good
+        // as any other information. This could improve the situation with
+        // other archive managers too.
+        // This field is usually used without the utf8 flag, with a non
+        // unicode path in the header (winrar, winzip). This helps (a bit)
+        // with the messy Windows' default compressed folders feature but
+        // breaks on p7zip which doesn't seek the unicode path extra field.
+        // So for now, UTF-8 everywhere !
+        unicodePathExtraField =
+            // Version
+            decToHex(1, 1) +
+            // NameCRC32
+            decToHex(crc32(encodedFileName), 4) +
+            // UnicodeName
+            utfEncodedFileName;
+
+        extraFields +=
+            // Info-ZIP Unicode Path Extra Field
+            "\x75\x70" +
+            // size
+            decToHex(unicodePathExtraField.length, 2) +
+            // content
+            unicodePathExtraField;
+    }
+
+    if(useUTF8ForComment) {
+
+        unicodeCommentExtraField =
+            // Version
+            decToHex(1, 1) +
+            // CommentCRC32
+            decToHex(this.crc32(encodedComment), 4) +
+            // UnicodeName
+            utfEncodedComment;
+
+        extraFields +=
+            // Info-ZIP Unicode Path Extra Field
+            "\x75\x63" +
+            // size
+            decToHex(unicodeCommentExtraField.length, 2) +
+            // content
+            unicodeCommentExtraField;
+    }
+
+    var header = "";
+
+    // version needed to extract
+    header += "\x0A\x00";
+    // general purpose bit flag
+    // set bit 11 if utf8
+    header += !useCustomEncoding && (useUTF8ForFileName || useUTF8ForComment) ? "\x00\x08" : "\x00\x00";
+    // compression method
+    header += compressedObject.compressionMethod;
+    // last mod file time
+    header += decToHex(dosTime, 2);
+    // last mod file date
+    header += decToHex(dosDate, 2);
+    // crc-32
+    header += decToHex(compressedObject.crc32, 4);
+    // compressed size
+    header += decToHex(compressedObject.compressedSize, 4);
+    // uncompressed size
+    header += decToHex(compressedObject.uncompressedSize, 4);
+    // file name length
+    header += decToHex(encodedFileName.length, 2);
+    // extra field length
+    header += decToHex(extraFields.length, 2);
+
+
+    var fileRecord = signature.LOCAL_FILE_HEADER + header + encodedFileName + extraFields;
+
+    var dirRecord = signature.CENTRAL_FILE_HEADER +
+    // version made by (00: DOS)
+    decToHex(versionMadeBy, 2) +
+    // file header (common to file and central directory)
+    header +
+    // file comment length
+    decToHex(encodedComment.length, 2) +
+    // disk number start
+    "\x00\x00" +
+    // internal file attributes TODO
+    "\x00\x00" +
+    // external file attributes
+    decToHex(extFileAttr, 4) +
+    // relative offset of local header
+    decToHex(offset, 4) +
+    // file name
+    encodedFileName +
+    // extra field
+    extraFields +
+    // file comment
+    encodedComment;
+
+    return {
+        fileRecord: fileRecord,
+        dirRecord: dirRecord,
+        compressedObject: compressedObject
+    };
+};
+
+
+// return the actual prototype of JSZip
+var out = {
+    /**
+     * Read an existing zip and merge the data in the current JSZip object.
+     * The implementation is in jszip-load.js, don't forget to include it.
+     * @param {String|ArrayBuffer|Uint8Array|Buffer} stream  The stream to load
+     * @param {Object} options Options for loading the stream.
+     *  options.base64 : is the stream in base64 ? default : false
+     * @return {JSZip} the current JSZip object
+     */
+    load: function(stream, options) {
+        throw new Error("Load method is not defined. Is the file jszip-load.js included ?");
+    },
+
+    /**
+     * Filter nested files/folders with the specified function.
+     * @param {Function} search the predicate to use :
+     * function (relativePath, file) {...}
+     * It takes 2 arguments : the relative path and the file.
+     * @return {Array} An array of matching elements.
+     */
+    filter: function(search) {
+        var result = [],
+            filename, relativePath, file, fileClone;
+        for (filename in this.files) {
+            if (!this.files.hasOwnProperty(filename)) {
+                continue;
+            }
+            file = this.files[filename];
+            // return a new object, don't let the user mess with our internal objects :)
+            fileClone = new ZipObject(file.name, file._data, utils.extend(file.options));
+            relativePath = filename.slice(this.root.length, filename.length);
+            if (filename.slice(0, this.root.length) === this.root && // the file is in the current root
+            search(relativePath, fileClone)) { // and the file matches the function
+                result.push(fileClone);
+            }
+        }
+        return result;
+    },
+
+    /**
+     * Add a file to the zip file, or search a file.
+     * @param   {string|RegExp} name The name of the file to add (if data is defined),
+     * the name of the file to find (if no data) or a regex to match files.
+     * @param   {String|ArrayBuffer|Uint8Array|Buffer} data  The file data, either raw or base64 encoded
+     * @param   {Object} o     File options
+     * @return  {JSZip|Object|Array} this JSZip object (when adding a file),
+     * a file (when searching by string) or an array of files (when searching by regex).
+     */
+    file: function(name, data, o) {
+        if (arguments.length === 1) {
+            if (utils.isRegExp(name)) {
+                var regexp = name;
+                return this.filter(function(relativePath, file) {
+                    return !file.dir && regexp.test(relativePath);
+                });
+            }
+            else { // text
+                return this.filter(function(relativePath, file) {
+                    return !file.dir && relativePath === name;
+                })[0] || null;
+            }
+        }
+        else { // more than one argument : we have data !
+            name = this.root + name;
+            fileAdd.call(this, name, data, o);
+        }
+        return this;
+    },
+
+    /**
+     * Add a directory to the zip file, or search.
+     * @param   {String|RegExp} arg The name of the directory to add, or a regex to search folders.
+     * @return  {JSZip} an object with the new directory as the root, or an array containing matching folders.
+     */
+    folder: function(arg) {
+        if (!arg) {
+            return this;
+        }
+
+        if (utils.isRegExp(arg)) {
+            return this.filter(function(relativePath, file) {
+                return file.dir && arg.test(relativePath);
+            });
+        }
+
+        // else, name is a new folder
+        var name = this.root + arg;
+        var newFolder = folderAdd.call(this, name);
+
+        // Allow chaining by returning a new object with this folder as the root
+        var ret = this.clone();
+        ret.root = newFolder.name;
+        return ret;
+    },
+
+    /**
+     * Delete a file, or a directory and all sub-files, from the zip
+     * @param {string} name the name of the file to delete
+     * @return {JSZip} this JSZip object
+     */
+    remove: function(name) {
+        name = this.root + name;
+        var file = this.files[name];
+        if (!file) {
+            // Look for any folders
+            if (name.slice(-1) != "/") {
+                name += "/";
+            }
+            file = this.files[name];
+        }
+
+        if (file && !file.dir) {
+            // file
+            delete this.files[name];
+        } else {
+            // maybe a folder, delete recursively
+            var kids = this.filter(function(relativePath, file) {
+                return file.name.slice(0, name.length) === name;
+            });
+            for (var i = 0; i < kids.length; i++) {
+                delete this.files[kids[i].name];
+            }
+        }
+
+        return this;
+    },
+
+    /**
+     * Generate the complete zip file
+     * @param {Object} options the options to generate the zip file :
+     * - base64, (deprecated, use type instead) true to generate base64.
+     * - compression, "STORE" by default.
+     * - type, "base64" by default. Values are : string, base64, uint8array, arraybuffer, blob.
+     * @return {String|Uint8Array|ArrayBuffer|Buffer|Blob} the zip file
+     */
+    generate: function(options) {
+        options = utils.extend(options || {}, {
+            base64: true,
+            compression: "STORE",
+            compressionOptions : null,
+            type: "base64",
+            platform: "DOS",
+            comment: null,
+            mimeType: 'application/zip',
+            encodeFileName: utf8.utf8encode
+        });
+
+        utils.checkSupport(options.type);
+
+        // accept nodejs `process.platform`
+        if(
+          options.platform === 'darwin' ||
+          options.platform === 'freebsd' ||
+          options.platform === 'linux' ||
+          options.platform === 'sunos'
+        ) {
+          options.platform = "UNIX";
+        }
+        if (options.platform === 'win32') {
+          options.platform = "DOS";
+        }
+
+        var zipData = [],
+            localDirLength = 0,
+            centralDirLength = 0,
+            writer, i,
+            encodedComment = utils.transformTo("string", options.encodeFileName(options.comment || this.comment || ""));
+
+        // first, generate all the zip parts.
+        for (var name in this.files) {
+            if (!this.files.hasOwnProperty(name)) {
+                continue;
+            }
+            var file = this.files[name];
+
+            var compressionName = file.options.compression || options.compression.toUpperCase();
+            var compression = compressions[compressionName];
+            if (!compression) {
+                throw new Error(compressionName + " is not a valid compression method !");
+            }
+            var compressionOptions = file.options.compressionOptions || options.compressionOptions || {};
+
+            var compressedObject = generateCompressedObjectFrom.call(this, file, compression, compressionOptions);
+
+            var zipPart = generateZipParts.call(this, name, file, compressedObject, localDirLength, options.platform, options.encodeFileName);
+            localDirLength += zipPart.fileRecord.length + compressedObject.compressedSize;
+            centralDirLength += zipPart.dirRecord.length;
+            zipData.push(zipPart);
+        }
+
+        var dirEnd = "";
+
+        // end of central dir signature
+        dirEnd = signature.CENTRAL_DIRECTORY_END +
+        // number of this disk
+        "\x00\x00" +
+        // number of the disk with the start of the central directory
+        "\x00\x00" +
+        // total number of entries in the central directory on this disk
+        decToHex(zipData.length, 2) +
+        // total number of entries in the central directory
+        decToHex(zipData.length, 2) +
+        // size of the central directory   4 bytes
+        decToHex(centralDirLength, 4) +
+        // offset of start of central directory with respect to the starting disk number
+        decToHex(localDirLength, 4) +
+        // .ZIP file comment length
+        decToHex(encodedComment.length, 2) +
+        // .ZIP file comment
+        encodedComment;
+
+
+        // we have all the parts (and the total length)
+        // time to create a writer !
+        var typeName = options.type.toLowerCase();
+        if(typeName==="uint8array"||typeName==="arraybuffer"||typeName==="blob"||typeName==="nodebuffer") {
+            writer = new Uint8ArrayWriter(localDirLength + centralDirLength + dirEnd.length);
+        }else{
+            writer = new StringWriter(localDirLength + centralDirLength + dirEnd.length);
+        }
+
+        for (i = 0; i < zipData.length; i++) {
+            writer.append(zipData[i].fileRecord);
+            writer.append(zipData[i].compressedObject.compressedContent);
+        }
+        for (i = 0; i < zipData.length; i++) {
+            writer.append(zipData[i].dirRecord);
+        }
+
+        writer.append(dirEnd);
+
+        var zip = writer.finalize();
+
+
+
+        switch(options.type.toLowerCase()) {
+            // case "zip is an Uint8Array"
+            case "uint8array" :
+            case "arraybuffer" :
+            case "nodebuffer" :
+               return utils.transformTo(options.type.toLowerCase(), zip);
+            case "blob" :
+               return utils.arrayBuffer2Blob(utils.transformTo("arraybuffer", zip), options.mimeType);
+            // case "zip is a string"
+            case "base64" :
+               return (options.base64) ? base64.encode(zip) : zip;
+            default : // case "string" :
+               return zip;
+         }
+
+    },
+
+    /**
+     * @deprecated
+     * This method will be removed in a future version without replacement.
+     */
+    crc32: function (input, crc) {
+        return crc32(input, crc);
+    },
+
+    /**
+     * @deprecated
+     * This method will be removed in a future version without replacement.
+     */
+    utf8encode: function (string) {
+        return utils.transformTo("string", utf8.utf8encode(string));
+    },
+
+    /**
+     * @deprecated
+     * This method will be removed in a future version without replacement.
+     */
+    utf8decode: function (input) {
+        return utf8.utf8decode(input);
+    }
+};
+module.exports = out;
+
+
+/***/ }),
+/* 6 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+exports.STORE = {
+    magic: "\x00\x00",
+    compress: function(content, compressionOptions) {
+        return content; // no compression
+    },
+    uncompress: function(content) {
+        return content; // no compression
+    },
+    compressInputType: null,
+    uncompressInputType: null
+};
+exports.DEFLATE = __webpack_require__(30);
+
+
+/***/ }),
+/* 7 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+// (C) 1995-2013 Jean-loup Gailly and Mark Adler
+// (C) 2014-2017 Vitaly Puzrin and Andrey Tupitsin
+//
+// This software is provided 'as-is', without any express or implied
+// warranty. In no event will the authors be held liable for any damages
+// arising from the use of this software.
+//
+// Permission is granted to anyone to use this software for any purpose,
+// including commercial applications, and to alter it and redistribute it
+// freely, subject to the following restrictions:
+//
+// 1. The origin of this software must not be misrepresented; you must not
+//   claim that you wrote the original software. If you use this software
+//   in a product, an acknowledgment in the product documentation would be
+//   appreciated but is not required.
+// 2. Altered source versions must be plainly marked as such, and must not be
+//   misrepresented as being the original software.
+// 3. This notice may not be removed or altered from any source distribution.
+
+module.exports = {
+  2:      'need dictionary',     /* Z_NEED_DICT       2  */
+  1:      'stream end',          /* Z_STREAM_END      1  */
+  0:      '',                    /* Z_OK              0  */
+  '-1':   'file error',          /* Z_ERRNO         (-1) */
+  '-2':   'stream error',        /* Z_STREAM_ERROR  (-2) */
+  '-3':   'data error',          /* Z_DATA_ERROR    (-3) */
+  '-4':   'insufficient memory', /* Z_MEM_ERROR     (-4) */
+  '-5':   'buffer error',        /* Z_BUF_ERROR     (-5) */
+  '-6':   'incompatible version' /* Z_VERSION_ERROR (-6) */
+};
+
+
+/***/ }),
+/* 8 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+/* WEBPACK VAR INJECTION */(function(Buffer) {
+module.exports = function(data, encoding){
+    return new Buffer(data, encoding);
+};
+module.exports.test = function(b){
+    return Buffer.isBuffer(b);
+};
+
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9).Buffer))
+
+/***/ }),
+/* 9 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -1098,9 +1878,9 @@ function appendElement (hander,node) {
 
 
 
-var base64 = __webpack_require__(55)
-var ieee754 = __webpack_require__(56)
-var isArray = __webpack_require__(25)
+var base64 = __webpack_require__(27)
+var ieee754 = __webpack_require__(28)
+var isArray = __webpack_require__(29)
 
 exports.Buffer = Buffer
 exports.SlowBuffer = SlowBuffer
@@ -2878,4274 +3658,10 @@ function isnan (val) {
   return val !== val // eslint-disable-line no-self-compare
 }
 
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9)))
-
-/***/ }),
-/* 4 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(Buffer) {
-
-exports.base64 = true;
-exports.array = true;
-exports.string = true;
-exports.arraybuffer = typeof ArrayBuffer !== "undefined" && typeof Uint8Array !== "undefined";
-exports.nodebuffer = typeof Buffer !== "undefined";
-// contains true if JSZip can read/generate Uint8Array, false otherwise.
-exports.uint8array = typeof Uint8Array !== "undefined";
-
-if (typeof ArrayBuffer === "undefined") {
-    exports.blob = false;
-}
-else {
-    var buffer = new ArrayBuffer(0);
-    try {
-        exports.blob = new Blob([buffer], {
-            type: "application/zip"
-        }).size === 0;
-    }
-    catch (e) {
-        try {
-            var Builder = self.BlobBuilder || self.WebKitBlobBuilder || self.MozBlobBuilder || self.MSBlobBuilder;
-            var builder = new Builder();
-            builder.append(buffer);
-            exports.blob = builder.getBlob('application/zip').size === 0;
-        }
-        catch (e) {
-            exports.blob = false;
-        }
-    }
-}
-
-try {
-    exports.nodestream = !!__webpack_require__(26).Readable;
-} catch(e) {
-    exports.nodestream = false;
-}
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(3).Buffer))
-
-/***/ }),
-/* 5 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-
-var TYPED_OK =  (typeof Uint8Array !== 'undefined') &&
-                (typeof Uint16Array !== 'undefined') &&
-                (typeof Int32Array !== 'undefined');
-
-function _has(obj, key) {
-  return Object.prototype.hasOwnProperty.call(obj, key);
-}
-
-exports.assign = function (obj /*from1, from2, from3, ...*/) {
-  var sources = Array.prototype.slice.call(arguments, 1);
-  while (sources.length) {
-    var source = sources.shift();
-    if (!source) { continue; }
-
-    if (typeof source !== 'object') {
-      throw new TypeError(source + 'must be non-object');
-    }
-
-    for (var p in source) {
-      if (_has(source, p)) {
-        obj[p] = source[p];
-      }
-    }
-  }
-
-  return obj;
-};
-
-
-// reduce buffer size, avoiding mem copy
-exports.shrinkBuf = function (buf, size) {
-  if (buf.length === size) { return buf; }
-  if (buf.subarray) { return buf.subarray(0, size); }
-  buf.length = size;
-  return buf;
-};
-
-
-var fnTyped = {
-  arraySet: function (dest, src, src_offs, len, dest_offs) {
-    if (src.subarray && dest.subarray) {
-      dest.set(src.subarray(src_offs, src_offs + len), dest_offs);
-      return;
-    }
-    // Fallback to ordinary array
-    for (var i = 0; i < len; i++) {
-      dest[dest_offs + i] = src[src_offs + i];
-    }
-  },
-  // Join array of chunks to single array.
-  flattenChunks: function (chunks) {
-    var i, l, len, pos, chunk, result;
-
-    // calculate data length
-    len = 0;
-    for (i = 0, l = chunks.length; i < l; i++) {
-      len += chunks[i].length;
-    }
-
-    // join chunks
-    result = new Uint8Array(len);
-    pos = 0;
-    for (i = 0, l = chunks.length; i < l; i++) {
-      chunk = chunks[i];
-      result.set(chunk, pos);
-      pos += chunk.length;
-    }
-
-    return result;
-  }
-};
-
-var fnUntyped = {
-  arraySet: function (dest, src, src_offs, len, dest_offs) {
-    for (var i = 0; i < len; i++) {
-      dest[dest_offs + i] = src[src_offs + i];
-    }
-  },
-  // Join array of chunks to single array.
-  flattenChunks: function (chunks) {
-    return [].concat.apply([], chunks);
-  }
-};
-
-
-// Enable/Disable typed arrays use, for testing
-//
-exports.setTyped = function (on) {
-  if (on) {
-    exports.Buf8  = Uint8Array;
-    exports.Buf16 = Uint16Array;
-    exports.Buf32 = Int32Array;
-    exports.assign(exports, fnTyped);
-  } else {
-    exports.Buf8  = Array;
-    exports.Buf16 = Array;
-    exports.Buf32 = Array;
-    exports.assign(exports, fnUntyped);
-  }
-};
-
-exports.setTyped(TYPED_OK);
-
-
-/***/ }),
-/* 6 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// a duplex stream is just a stream that is both readable and writable.
-// Since JS doesn't have multiple prototypal inheritance, this class
-// prototypally inherits from Readable, and then parasitically from
-// Writable.
-
-
-
-/*<replacement>*/
-
-var objectKeys = Object.keys || function (obj) {
-  var keys = [];
-  for (var key in obj) {
-    keys.push(key);
-  }return keys;
-};
-/*</replacement>*/
-
-module.exports = Duplex;
-
-/*<replacement>*/
-var processNextTick = __webpack_require__(17);
-/*</replacement>*/
-
-/*<replacement>*/
-var util = __webpack_require__(10);
-util.inherits = __webpack_require__(8);
-/*</replacement>*/
-
-var Readable = __webpack_require__(27);
-var Writable = __webpack_require__(18);
-
-util.inherits(Duplex, Readable);
-
-var keys = objectKeys(Writable.prototype);
-for (var v = 0; v < keys.length; v++) {
-  var method = keys[v];
-  if (!Duplex.prototype[method]) Duplex.prototype[method] = Writable.prototype[method];
-}
-
-function Duplex(options) {
-  if (!(this instanceof Duplex)) return new Duplex(options);
-
-  Readable.call(this, options);
-  Writable.call(this, options);
-
-  if (options && options.readable === false) this.readable = false;
-
-  if (options && options.writable === false) this.writable = false;
-
-  this.allowHalfOpen = true;
-  if (options && options.allowHalfOpen === false) this.allowHalfOpen = false;
-
-  this.once('end', onend);
-}
-
-// the no-half-open enforcer
-function onend() {
-  // if we allow half-open state, or if the writable side ended,
-  // then we're ok.
-  if (this.allowHalfOpen || this._writableState.ended) return;
-
-  // no more data can be written.
-  // But allow more writes to happen in this tick.
-  processNextTick(onEndNT, this);
-}
-
-function onEndNT(self) {
-  self.end();
-}
-
-function forEach(xs, f) {
-  for (var i = 0, l = xs.length; i < l; i++) {
-    f(xs[i], i);
-  }
-}
-
-/***/ }),
-/* 7 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var utils = __webpack_require__(0);
-var support = __webpack_require__(4);
-var nodejsUtils = __webpack_require__(15);
-var GenericWorker = __webpack_require__(1);
-
-/**
- * The following functions come from pako, from pako/lib/utils/strings
- * released under the MIT license, see pako https://github.com/nodeca/pako/
- */
-
-// Table with utf8 lengths (calculated by first byte of sequence)
-// Note, that 5 & 6-byte values and some 4-byte values can not be represented in JS,
-// because max possible codepoint is 0x10ffff
-var _utf8len = new Array(256);
-for (var i=0; i<256; i++) {
-  _utf8len[i] = (i >= 252 ? 6 : i >= 248 ? 5 : i >= 240 ? 4 : i >= 224 ? 3 : i >= 192 ? 2 : 1);
-}
-_utf8len[254]=_utf8len[254]=1; // Invalid sequence start
-
-// convert string to array (typed, when possible)
-var string2buf = function (str) {
-    var buf, c, c2, m_pos, i, str_len = str.length, buf_len = 0;
-
-    // count binary size
-    for (m_pos = 0; m_pos < str_len; m_pos++) {
-        c = str.charCodeAt(m_pos);
-        if ((c & 0xfc00) === 0xd800 && (m_pos+1 < str_len)) {
-            c2 = str.charCodeAt(m_pos+1);
-            if ((c2 & 0xfc00) === 0xdc00) {
-                c = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
-                m_pos++;
-            }
-        }
-        buf_len += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-    }
-
-    // allocate buffer
-    if (support.uint8array) {
-        buf = new Uint8Array(buf_len);
-    } else {
-        buf = new Array(buf_len);
-    }
-
-    // convert
-    for (i=0, m_pos = 0; i < buf_len; m_pos++) {
-        c = str.charCodeAt(m_pos);
-        if ((c & 0xfc00) === 0xd800 && (m_pos+1 < str_len)) {
-            c2 = str.charCodeAt(m_pos+1);
-            if ((c2 & 0xfc00) === 0xdc00) {
-                c = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
-                m_pos++;
-            }
-        }
-        if (c < 0x80) {
-            /* one byte */
-            buf[i++] = c;
-        } else if (c < 0x800) {
-            /* two bytes */
-            buf[i++] = 0xC0 | (c >>> 6);
-            buf[i++] = 0x80 | (c & 0x3f);
-        } else if (c < 0x10000) {
-            /* three bytes */
-            buf[i++] = 0xE0 | (c >>> 12);
-            buf[i++] = 0x80 | (c >>> 6 & 0x3f);
-            buf[i++] = 0x80 | (c & 0x3f);
-        } else {
-            /* four bytes */
-            buf[i++] = 0xf0 | (c >>> 18);
-            buf[i++] = 0x80 | (c >>> 12 & 0x3f);
-            buf[i++] = 0x80 | (c >>> 6 & 0x3f);
-            buf[i++] = 0x80 | (c & 0x3f);
-        }
-    }
-
-    return buf;
-};
-
-// Calculate max possible position in utf8 buffer,
-// that will not break sequence. If that's not possible
-// - (very small limits) return max size as is.
-//
-// buf[] - utf8 bytes array
-// max   - length limit (mandatory);
-var utf8border = function(buf, max) {
-    var pos;
-
-    max = max || buf.length;
-    if (max > buf.length) { max = buf.length; }
-
-    // go back from last position, until start of sequence found
-    pos = max-1;
-    while (pos >= 0 && (buf[pos] & 0xC0) === 0x80) { pos--; }
-
-    // Fuckup - very small and broken sequence,
-    // return max, because we should return something anyway.
-    if (pos < 0) { return max; }
-
-    // If we came to start of buffer - that means vuffer is too small,
-    // return max too.
-    if (pos === 0) { return max; }
-
-    return (pos + _utf8len[buf[pos]] > max) ? pos : max;
-};
-
-// convert array to string
-var buf2string = function (buf) {
-    var str, i, out, c, c_len;
-    var len = buf.length;
-
-    // Reserve max possible length (2 words per char)
-    // NB: by unknown reasons, Array is significantly faster for
-    //     String.fromCharCode.apply than Uint16Array.
-    var utf16buf = new Array(len*2);
-
-    for (out=0, i=0; i<len;) {
-        c = buf[i++];
-        // quick process ascii
-        if (c < 0x80) { utf16buf[out++] = c; continue; }
-
-        c_len = _utf8len[c];
-        // skip 5 & 6 byte codes
-        if (c_len > 4) { utf16buf[out++] = 0xfffd; i += c_len-1; continue; }
-
-        // apply mask on first byte
-        c &= c_len === 2 ? 0x1f : c_len === 3 ? 0x0f : 0x07;
-        // join the rest
-        while (c_len > 1 && i < len) {
-            c = (c << 6) | (buf[i++] & 0x3f);
-            c_len--;
-        }
-
-        // terminated by end of string?
-        if (c_len > 1) { utf16buf[out++] = 0xfffd; continue; }
-
-        if (c < 0x10000) {
-            utf16buf[out++] = c;
-        } else {
-            c -= 0x10000;
-            utf16buf[out++] = 0xd800 | ((c >> 10) & 0x3ff);
-            utf16buf[out++] = 0xdc00 | (c & 0x3ff);
-        }
-    }
-
-    // shrinkBuf(utf16buf, out)
-    if (utf16buf.length !== out) {
-        if(utf16buf.subarray) {
-            utf16buf = utf16buf.subarray(0, out);
-        } else {
-            utf16buf.length = out;
-        }
-    }
-
-    // return String.fromCharCode.apply(null, utf16buf);
-    return utils.applyFromCharCode(utf16buf);
-};
-
-
-// That's all for the pako functions.
-
-
-/**
- * Transform a javascript string into an array (typed if possible) of bytes,
- * UTF-8 encoded.
- * @param {String} str the string to encode
- * @return {Array|Uint8Array|Buffer} the UTF-8 encoded string.
- */
-exports.utf8encode = function utf8encode(str) {
-    if (support.nodebuffer) {
-        return nodejsUtils.newBufferFrom(str, "utf-8");
-    }
-
-    return string2buf(str);
-};
-
-
-/**
- * Transform a bytes array (or a representation) representing an UTF-8 encoded
- * string into a javascript string.
- * @param {Array|Uint8Array|Buffer} buf the data de decode
- * @return {String} the decoded string.
- */
-exports.utf8decode = function utf8decode(buf) {
-    if (support.nodebuffer) {
-        return utils.transformTo("nodebuffer", buf).toString("utf-8");
-    }
-
-    buf = utils.transformTo(support.uint8array ? "uint8array" : "array", buf);
-
-    return buf2string(buf);
-};
-
-/**
- * A worker to decode utf8 encoded binary chunks into string chunks.
- * @constructor
- */
-function Utf8DecodeWorker() {
-    GenericWorker.call(this, "utf-8 decode");
-    // the last bytes if a chunk didn't end with a complete codepoint.
-    this.leftOver = null;
-}
-utils.inherits(Utf8DecodeWorker, GenericWorker);
-
-/**
- * @see GenericWorker.processChunk
- */
-Utf8DecodeWorker.prototype.processChunk = function (chunk) {
-
-    var data = utils.transformTo(support.uint8array ? "uint8array" : "array", chunk.data);
-
-    // 1st step, re-use what's left of the previous chunk
-    if (this.leftOver && this.leftOver.length) {
-        if(support.uint8array) {
-            var previousData = data;
-            data = new Uint8Array(previousData.length + this.leftOver.length);
-            data.set(this.leftOver, 0);
-            data.set(previousData, this.leftOver.length);
-        } else {
-            data = this.leftOver.concat(data);
-        }
-        this.leftOver = null;
-    }
-
-    var nextBoundary = utf8border(data);
-    var usableData = data;
-    if (nextBoundary !== data.length) {
-        if (support.uint8array) {
-            usableData = data.subarray(0, nextBoundary);
-            this.leftOver = data.subarray(nextBoundary, data.length);
-        } else {
-            usableData = data.slice(0, nextBoundary);
-            this.leftOver = data.slice(nextBoundary, data.length);
-        }
-    }
-
-    this.push({
-        data : exports.utf8decode(usableData),
-        meta : chunk.meta
-    });
-};
-
-/**
- * @see GenericWorker.flush
- */
-Utf8DecodeWorker.prototype.flush = function () {
-    if(this.leftOver && this.leftOver.length) {
-        this.push({
-            data : exports.utf8decode(this.leftOver),
-            meta : {}
-        });
-        this.leftOver = null;
-    }
-};
-exports.Utf8DecodeWorker = Utf8DecodeWorker;
-
-/**
- * A worker to endcode string chunks into utf8 encoded binary chunks.
- * @constructor
- */
-function Utf8EncodeWorker() {
-    GenericWorker.call(this, "utf-8 encode");
-}
-utils.inherits(Utf8EncodeWorker, GenericWorker);
-
-/**
- * @see GenericWorker.processChunk
- */
-Utf8EncodeWorker.prototype.processChunk = function (chunk) {
-    this.push({
-        data : exports.utf8encode(chunk.data),
-        meta : chunk.meta
-    });
-};
-exports.Utf8EncodeWorker = Utf8EncodeWorker;
-
-
-/***/ }),
-/* 8 */
-/***/ (function(module, exports) {
-
-if (typeof Object.create === 'function') {
-  // implementation from standard node.js 'util' module
-  module.exports = function inherits(ctor, superCtor) {
-    ctor.super_ = superCtor
-    ctor.prototype = Object.create(superCtor.prototype, {
-      constructor: {
-        value: ctor,
-        enumerable: false,
-        writable: true,
-        configurable: true
-      }
-    });
-  };
-} else {
-  // old school shim for old browsers
-  module.exports = function inherits(ctor, superCtor) {
-    ctor.super_ = superCtor
-    var TempCtor = function () {}
-    TempCtor.prototype = superCtor.prototype
-    ctor.prototype = new TempCtor()
-    ctor.prototype.constructor = ctor
-  }
-}
-
-
-/***/ }),
-/* 9 */
-/***/ (function(module, exports) {
-
-var g;
-
-// This works in non-strict mode
-g = (function() {
-	return this;
-})();
-
-try {
-	// This works if eval is allowed (see CSP)
-	g = g || Function("return this")() || (1,eval)("this");
-} catch(e) {
-	// This works if the window reference is available
-	if(typeof window === "object")
-		g = window;
-}
-
-// g can still be undefined, but nothing to do about it...
-// We return undefined, instead of nothing here, so it's
-// easier to handle this case. if(!global) { ...}
-
-module.exports = g;
-
+/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(26)))
 
 /***/ }),
 /* 10 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/* WEBPACK VAR INJECTION */(function(Buffer) {// Copyright Joyent, Inc. and other Node contributors.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to permit
-// persons to whom the Software is furnished to do so, subject to the
-// following conditions:
-//
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-// USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-// NOTE: These type checking functions intentionally don't use `instanceof`
-// because it is fragile and can be easily faked with `Object.create()`.
-
-function isArray(arg) {
-  if (Array.isArray) {
-    return Array.isArray(arg);
-  }
-  return objectToString(arg) === '[object Array]';
-}
-exports.isArray = isArray;
-
-function isBoolean(arg) {
-  return typeof arg === 'boolean';
-}
-exports.isBoolean = isBoolean;
-
-function isNull(arg) {
-  return arg === null;
-}
-exports.isNull = isNull;
-
-function isNullOrUndefined(arg) {
-  return arg == null;
-}
-exports.isNullOrUndefined = isNullOrUndefined;
-
-function isNumber(arg) {
-  return typeof arg === 'number';
-}
-exports.isNumber = isNumber;
-
-function isString(arg) {
-  return typeof arg === 'string';
-}
-exports.isString = isString;
-
-function isSymbol(arg) {
-  return typeof arg === 'symbol';
-}
-exports.isSymbol = isSymbol;
-
-function isUndefined(arg) {
-  return arg === void 0;
-}
-exports.isUndefined = isUndefined;
-
-function isRegExp(re) {
-  return objectToString(re) === '[object RegExp]';
-}
-exports.isRegExp = isRegExp;
-
-function isObject(arg) {
-  return typeof arg === 'object' && arg !== null;
-}
-exports.isObject = isObject;
-
-function isDate(d) {
-  return objectToString(d) === '[object Date]';
-}
-exports.isDate = isDate;
-
-function isError(e) {
-  return (objectToString(e) === '[object Error]' || e instanceof Error);
-}
-exports.isError = isError;
-
-function isFunction(arg) {
-  return typeof arg === 'function';
-}
-exports.isFunction = isFunction;
-
-function isPrimitive(arg) {
-  return arg === null ||
-         typeof arg === 'boolean' ||
-         typeof arg === 'number' ||
-         typeof arg === 'string' ||
-         typeof arg === 'symbol' ||  // ES6 symbol
-         typeof arg === 'undefined';
-}
-exports.isPrimitive = isPrimitive;
-
-exports.isBuffer = Buffer.isBuffer;
-
-function objectToString(o) {
-  return Object.prototype.toString.call(o);
-}
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(3).Buffer))
-
-/***/ }),
-/* 11 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* global Promise */
-
-
-// load the global object first:
-// - it should be better integrated in the system (unhandledRejection in node)
-// - the environment may have a custom Promise implementation (see zone.js)
-var ES6Promise = null;
-if (typeof Promise !== "undefined") {
-    ES6Promise = Promise;
-} else {
-    ES6Promise = __webpack_require__(81);
-}
-
-/**
- * Let the user use/change some implementations.
- */
-module.exports = {
-    Promise: ES6Promise
-};
-
-
-/***/ }),
-/* 12 */
-/***/ (function(module, exports, __webpack_require__) {
-
-// Copyright Joyent, Inc. and other Node contributors.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to permit
-// persons to whom the Software is furnished to do so, subject to the
-// following conditions:
-//
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-// USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-module.exports = Stream;
-
-var EE = __webpack_require__(13).EventEmitter;
-var inherits = __webpack_require__(8);
-
-inherits(Stream, EE);
-Stream.Readable = __webpack_require__(57);
-Stream.Writable = __webpack_require__(63);
-Stream.Duplex = __webpack_require__(64);
-Stream.Transform = __webpack_require__(65);
-Stream.PassThrough = __webpack_require__(66);
-
-// Backwards-compat with node 0.4.x
-Stream.Stream = Stream;
-
-
-
-// old-style streams.  Note that the pipe method (the only relevant
-// part of this class) is overridden in the Readable class.
-
-function Stream() {
-  EE.call(this);
-}
-
-Stream.prototype.pipe = function(dest, options) {
-  var source = this;
-
-  function ondata(chunk) {
-    if (dest.writable) {
-      if (false === dest.write(chunk) && source.pause) {
-        source.pause();
-      }
-    }
-  }
-
-  source.on('data', ondata);
-
-  function ondrain() {
-    if (source.readable && source.resume) {
-      source.resume();
-    }
-  }
-
-  dest.on('drain', ondrain);
-
-  // If the 'end' option is not supplied, dest.end() will be called when
-  // source gets the 'end' or 'close' events.  Only dest.end() once.
-  if (!dest._isStdio && (!options || options.end !== false)) {
-    source.on('end', onend);
-    source.on('close', onclose);
-  }
-
-  var didOnEnd = false;
-  function onend() {
-    if (didOnEnd) return;
-    didOnEnd = true;
-
-    dest.end();
-  }
-
-
-  function onclose() {
-    if (didOnEnd) return;
-    didOnEnd = true;
-
-    if (typeof dest.destroy === 'function') dest.destroy();
-  }
-
-  // don't leave dangling pipes when there are errors.
-  function onerror(er) {
-    cleanup();
-    if (EE.listenerCount(this, 'error') === 0) {
-      throw er; // Unhandled stream error in pipe.
-    }
-  }
-
-  source.on('error', onerror);
-  dest.on('error', onerror);
-
-  // remove all the event listeners that were added.
-  function cleanup() {
-    source.removeListener('data', ondata);
-    dest.removeListener('drain', ondrain);
-
-    source.removeListener('end', onend);
-    source.removeListener('close', onclose);
-
-    source.removeListener('error', onerror);
-    dest.removeListener('error', onerror);
-
-    source.removeListener('end', cleanup);
-    source.removeListener('close', cleanup);
-
-    dest.removeListener('close', cleanup);
-  }
-
-  source.on('end', cleanup);
-  source.on('close', cleanup);
-
-  dest.on('close', cleanup);
-
-  dest.emit('pipe', source);
-
-  // Allow for unix-like usage: A.pipe(B).pipe(C)
-  return dest;
-};
-
-
-/***/ }),
-/* 13 */
-/***/ (function(module, exports) {
-
-// Copyright Joyent, Inc. and other Node contributors.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to permit
-// persons to whom the Software is furnished to do so, subject to the
-// following conditions:
-//
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-// USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-function EventEmitter() {
-  this._events = this._events || {};
-  this._maxListeners = this._maxListeners || undefined;
-}
-module.exports = EventEmitter;
-
-// Backwards-compat with node 0.10.x
-EventEmitter.EventEmitter = EventEmitter;
-
-EventEmitter.prototype._events = undefined;
-EventEmitter.prototype._maxListeners = undefined;
-
-// By default EventEmitters will print a warning if more than 10 listeners are
-// added to it. This is a useful default which helps finding memory leaks.
-EventEmitter.defaultMaxListeners = 10;
-
-// Obviously not all Emitters should be limited to 10. This function allows
-// that to be increased. Set to zero for unlimited.
-EventEmitter.prototype.setMaxListeners = function(n) {
-  if (!isNumber(n) || n < 0 || isNaN(n))
-    throw TypeError('n must be a positive number');
-  this._maxListeners = n;
-  return this;
-};
-
-EventEmitter.prototype.emit = function(type) {
-  var er, handler, len, args, i, listeners;
-
-  if (!this._events)
-    this._events = {};
-
-  // If there is no 'error' event listener then throw.
-  if (type === 'error') {
-    if (!this._events.error ||
-        (isObject(this._events.error) && !this._events.error.length)) {
-      er = arguments[1];
-      if (er instanceof Error) {
-        throw er; // Unhandled 'error' event
-      } else {
-        // At least give some kind of context to the user
-        var err = new Error('Uncaught, unspecified "error" event. (' + er + ')');
-        err.context = er;
-        throw err;
-      }
-    }
-  }
-
-  handler = this._events[type];
-
-  if (isUndefined(handler))
-    return false;
-
-  if (isFunction(handler)) {
-    switch (arguments.length) {
-      // fast cases
-      case 1:
-        handler.call(this);
-        break;
-      case 2:
-        handler.call(this, arguments[1]);
-        break;
-      case 3:
-        handler.call(this, arguments[1], arguments[2]);
-        break;
-      // slower
-      default:
-        args = Array.prototype.slice.call(arguments, 1);
-        handler.apply(this, args);
-    }
-  } else if (isObject(handler)) {
-    args = Array.prototype.slice.call(arguments, 1);
-    listeners = handler.slice();
-    len = listeners.length;
-    for (i = 0; i < len; i++)
-      listeners[i].apply(this, args);
-  }
-
-  return true;
-};
-
-EventEmitter.prototype.addListener = function(type, listener) {
-  var m;
-
-  if (!isFunction(listener))
-    throw TypeError('listener must be a function');
-
-  if (!this._events)
-    this._events = {};
-
-  // To avoid recursion in the case that type === "newListener"! Before
-  // adding it to the listeners, first emit "newListener".
-  if (this._events.newListener)
-    this.emit('newListener', type,
-              isFunction(listener.listener) ?
-              listener.listener : listener);
-
-  if (!this._events[type])
-    // Optimize the case of one listener. Don't need the extra array object.
-    this._events[type] = listener;
-  else if (isObject(this._events[type]))
-    // If we've already got an array, just append.
-    this._events[type].push(listener);
-  else
-    // Adding the second element, need to change to array.
-    this._events[type] = [this._events[type], listener];
-
-  // Check for listener leak
-  if (isObject(this._events[type]) && !this._events[type].warned) {
-    if (!isUndefined(this._maxListeners)) {
-      m = this._maxListeners;
-    } else {
-      m = EventEmitter.defaultMaxListeners;
-    }
-
-    if (m && m > 0 && this._events[type].length > m) {
-      this._events[type].warned = true;
-      console.error('(node) warning: possible EventEmitter memory ' +
-                    'leak detected. %d listeners added. ' +
-                    'Use emitter.setMaxListeners() to increase limit.',
-                    this._events[type].length);
-      if (typeof console.trace === 'function') {
-        // not supported in IE 10
-        console.trace();
-      }
-    }
-  }
-
-  return this;
-};
-
-EventEmitter.prototype.on = EventEmitter.prototype.addListener;
-
-EventEmitter.prototype.once = function(type, listener) {
-  if (!isFunction(listener))
-    throw TypeError('listener must be a function');
-
-  var fired = false;
-
-  function g() {
-    this.removeListener(type, g);
-
-    if (!fired) {
-      fired = true;
-      listener.apply(this, arguments);
-    }
-  }
-
-  g.listener = listener;
-  this.on(type, g);
-
-  return this;
-};
-
-// emits a 'removeListener' event iff the listener was removed
-EventEmitter.prototype.removeListener = function(type, listener) {
-  var list, position, length, i;
-
-  if (!isFunction(listener))
-    throw TypeError('listener must be a function');
-
-  if (!this._events || !this._events[type])
-    return this;
-
-  list = this._events[type];
-  length = list.length;
-  position = -1;
-
-  if (list === listener ||
-      (isFunction(list.listener) && list.listener === listener)) {
-    delete this._events[type];
-    if (this._events.removeListener)
-      this.emit('removeListener', type, listener);
-
-  } else if (isObject(list)) {
-    for (i = length; i-- > 0;) {
-      if (list[i] === listener ||
-          (list[i].listener && list[i].listener === listener)) {
-        position = i;
-        break;
-      }
-    }
-
-    if (position < 0)
-      return this;
-
-    if (list.length === 1) {
-      list.length = 0;
-      delete this._events[type];
-    } else {
-      list.splice(position, 1);
-    }
-
-    if (this._events.removeListener)
-      this.emit('removeListener', type, listener);
-  }
-
-  return this;
-};
-
-EventEmitter.prototype.removeAllListeners = function(type) {
-  var key, listeners;
-
-  if (!this._events)
-    return this;
-
-  // not listening for removeListener, no need to emit
-  if (!this._events.removeListener) {
-    if (arguments.length === 0)
-      this._events = {};
-    else if (this._events[type])
-      delete this._events[type];
-    return this;
-  }
-
-  // emit removeListener for all listeners on all events
-  if (arguments.length === 0) {
-    for (key in this._events) {
-      if (key === 'removeListener') continue;
-      this.removeAllListeners(key);
-    }
-    this.removeAllListeners('removeListener');
-    this._events = {};
-    return this;
-  }
-
-  listeners = this._events[type];
-
-  if (isFunction(listeners)) {
-    this.removeListener(type, listeners);
-  } else if (listeners) {
-    // LIFO order
-    while (listeners.length)
-      this.removeListener(type, listeners[listeners.length - 1]);
-  }
-  delete this._events[type];
-
-  return this;
-};
-
-EventEmitter.prototype.listeners = function(type) {
-  var ret;
-  if (!this._events || !this._events[type])
-    ret = [];
-  else if (isFunction(this._events[type]))
-    ret = [this._events[type]];
-  else
-    ret = this._events[type].slice();
-  return ret;
-};
-
-EventEmitter.prototype.listenerCount = function(type) {
-  if (this._events) {
-    var evlistener = this._events[type];
-
-    if (isFunction(evlistener))
-      return 1;
-    else if (evlistener)
-      return evlistener.length;
-  }
-  return 0;
-};
-
-EventEmitter.listenerCount = function(emitter, type) {
-  return emitter.listenerCount(type);
-};
-
-function isFunction(arg) {
-  return typeof arg === 'function';
-}
-
-function isNumber(arg) {
-  return typeof arg === 'number';
-}
-
-function isObject(arg) {
-  return typeof arg === 'object' && arg !== null;
-}
-
-function isUndefined(arg) {
-  return arg === void 0;
-}
-
-
-/***/ }),
-/* 14 */
-/***/ (function(module, exports) {
-
-// shim for using process in browser
-var process = module.exports = {};
-
-// cached from whatever global is present so that test runners that stub it
-// don't break things.  But we need to wrap it in a try catch in case it is
-// wrapped in strict mode code which doesn't define any globals.  It's inside a
-// function because try/catches deoptimize in certain engines.
-
-var cachedSetTimeout;
-var cachedClearTimeout;
-
-function defaultSetTimout() {
-    throw new Error('setTimeout has not been defined');
-}
-function defaultClearTimeout () {
-    throw new Error('clearTimeout has not been defined');
-}
-(function () {
-    try {
-        if (typeof setTimeout === 'function') {
-            cachedSetTimeout = setTimeout;
-        } else {
-            cachedSetTimeout = defaultSetTimout;
-        }
-    } catch (e) {
-        cachedSetTimeout = defaultSetTimout;
-    }
-    try {
-        if (typeof clearTimeout === 'function') {
-            cachedClearTimeout = clearTimeout;
-        } else {
-            cachedClearTimeout = defaultClearTimeout;
-        }
-    } catch (e) {
-        cachedClearTimeout = defaultClearTimeout;
-    }
-} ())
-function runTimeout(fun) {
-    if (cachedSetTimeout === setTimeout) {
-        //normal enviroments in sane situations
-        return setTimeout(fun, 0);
-    }
-    // if setTimeout wasn't available but was latter defined
-    if ((cachedSetTimeout === defaultSetTimout || !cachedSetTimeout) && setTimeout) {
-        cachedSetTimeout = setTimeout;
-        return setTimeout(fun, 0);
-    }
-    try {
-        // when when somebody has screwed with setTimeout but no I.E. maddness
-        return cachedSetTimeout(fun, 0);
-    } catch(e){
-        try {
-            // When we are in I.E. but the script has been evaled so I.E. doesn't trust the global object when called normally
-            return cachedSetTimeout.call(null, fun, 0);
-        } catch(e){
-            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error
-            return cachedSetTimeout.call(this, fun, 0);
-        }
-    }
-
-
-}
-function runClearTimeout(marker) {
-    if (cachedClearTimeout === clearTimeout) {
-        //normal enviroments in sane situations
-        return clearTimeout(marker);
-    }
-    // if clearTimeout wasn't available but was latter defined
-    if ((cachedClearTimeout === defaultClearTimeout || !cachedClearTimeout) && clearTimeout) {
-        cachedClearTimeout = clearTimeout;
-        return clearTimeout(marker);
-    }
-    try {
-        // when when somebody has screwed with setTimeout but no I.E. maddness
-        return cachedClearTimeout(marker);
-    } catch (e){
-        try {
-            // When we are in I.E. but the script has been evaled so I.E. doesn't  trust the global object when called normally
-            return cachedClearTimeout.call(null, marker);
-        } catch (e){
-            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error.
-            // Some versions of I.E. have different rules for clearTimeout vs setTimeout
-            return cachedClearTimeout.call(this, marker);
-        }
-    }
-
-
-
-}
-var queue = [];
-var draining = false;
-var currentQueue;
-var queueIndex = -1;
-
-function cleanUpNextTick() {
-    if (!draining || !currentQueue) {
-        return;
-    }
-    draining = false;
-    if (currentQueue.length) {
-        queue = currentQueue.concat(queue);
-    } else {
-        queueIndex = -1;
-    }
-    if (queue.length) {
-        drainQueue();
-    }
-}
-
-function drainQueue() {
-    if (draining) {
-        return;
-    }
-    var timeout = runTimeout(cleanUpNextTick);
-    draining = true;
-
-    var len = queue.length;
-    while(len) {
-        currentQueue = queue;
-        queue = [];
-        while (++queueIndex < len) {
-            if (currentQueue) {
-                currentQueue[queueIndex].run();
-            }
-        }
-        queueIndex = -1;
-        len = queue.length;
-    }
-    currentQueue = null;
-    draining = false;
-    runClearTimeout(timeout);
-}
-
-process.nextTick = function (fun) {
-    var args = new Array(arguments.length - 1);
-    if (arguments.length > 1) {
-        for (var i = 1; i < arguments.length; i++) {
-            args[i - 1] = arguments[i];
-        }
-    }
-    queue.push(new Item(fun, args));
-    if (queue.length === 1 && !draining) {
-        runTimeout(drainQueue);
-    }
-};
-
-// v8 likes predictible objects
-function Item(fun, array) {
-    this.fun = fun;
-    this.array = array;
-}
-Item.prototype.run = function () {
-    this.fun.apply(null, this.array);
-};
-process.title = 'browser';
-process.browser = true;
-process.env = {};
-process.argv = [];
-process.version = ''; // empty string to avoid regexp issues
-process.versions = {};
-
-function noop() {}
-
-process.on = noop;
-process.addListener = noop;
-process.once = noop;
-process.off = noop;
-process.removeListener = noop;
-process.removeAllListeners = noop;
-process.emit = noop;
-process.prependListener = noop;
-process.prependOnceListener = noop;
-
-process.listeners = function (name) { return [] }
-
-process.binding = function (name) {
-    throw new Error('process.binding is not supported');
-};
-
-process.cwd = function () { return '/' };
-process.chdir = function (dir) {
-    throw new Error('process.chdir is not supported');
-};
-process.umask = function() { return 0; };
-
-
-/***/ }),
-/* 15 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(Buffer) {
-
-module.exports = {
-    /**
-     * True if this is running in Nodejs, will be undefined in a browser.
-     * In a browser, browserify won't include this file and the whole module
-     * will be resolved an empty object.
-     */
-    isNode : typeof Buffer !== "undefined",
-    /**
-     * Create a new nodejs Buffer from an existing content.
-     * @param {Object} data the data to pass to the constructor.
-     * @param {String} encoding the encoding to use.
-     * @return {Buffer} a new Buffer.
-     */
-    newBufferFrom: function(data, encoding) {
-        // XXX We can't use `Buffer.from` which comes from `Uint8Array.from`
-        // in nodejs v4 (< v.4.5). It's not the expected implementation (and
-        // has a different signature).
-        // see https://github.com/nodejs/node/issues/8053
-        // A condition on nodejs' version won't solve the issue as we don't
-        // control the Buffer polyfills that may or may not be used.
-        return new Buffer(data, encoding);
-    },
-    /**
-     * Create a new nodejs Buffer with the specified size.
-     * @param {Integer} size the size of the buffer.
-     * @return {Buffer} a new Buffer.
-     */
-    allocBuffer: function (size) {
-        if (Buffer.alloc) {
-            return Buffer.alloc(size);
-        } else {
-            return new Buffer(size);
-        }
-    },
-    /**
-     * Find out if an object is a Buffer.
-     * @param {Object} b the object to test.
-     * @return {Boolean} true if the object is a Buffer, false otherwise.
-     */
-    isBuffer : function(b){
-        return Buffer.isBuffer(b);
-    },
-
-    isStream : function (obj) {
-        return obj &&
-            typeof obj.on === "function" &&
-            typeof obj.pause === "function" &&
-            typeof obj.resume === "function";
-    }
-};
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(3).Buffer))
-
-/***/ }),
-/* 16 */
-/***/ (function(module, exports) {
-
-// https://github.com/zloirock/core-js/issues/86#issuecomment-115759028
-var global = module.exports = typeof window != 'undefined' && window.Math == Math
-  ? window : typeof self != 'undefined' && self.Math == Math ? self : Function('return this')();
-if(typeof __g == 'number')__g = global; // eslint-disable-line no-undef
-
-/***/ }),
-/* 17 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(process) {
-
-if (!process.version ||
-    process.version.indexOf('v0.') === 0 ||
-    process.version.indexOf('v1.') === 0 && process.version.indexOf('v1.8.') !== 0) {
-  module.exports = nextTick;
-} else {
-  module.exports = process.nextTick;
-}
-
-function nextTick(fn, arg1, arg2, arg3) {
-  if (typeof fn !== 'function') {
-    throw new TypeError('"callback" argument must be a function');
-  }
-  var len = arguments.length;
-  var args, i;
-  switch (len) {
-  case 0:
-  case 1:
-    return process.nextTick(fn);
-  case 2:
-    return process.nextTick(function afterTickOne() {
-      fn.call(null, arg1);
-    });
-  case 3:
-    return process.nextTick(function afterTickTwo() {
-      fn.call(null, arg1, arg2);
-    });
-  case 4:
-    return process.nextTick(function afterTickThree() {
-      fn.call(null, arg1, arg2, arg3);
-    });
-  default:
-    args = new Array(len - 1);
-    i = 0;
-    while (i < args.length) {
-      args[i++] = arguments[i];
-    }
-    return process.nextTick(function afterTick() {
-      fn.apply(null, args);
-    });
-  }
-}
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14)))
-
-/***/ }),
-/* 18 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(process, setImmediate) {// A bit simpler than readable streams.
-// Implement an async ._write(chunk, encoding, cb), and it'll handle all
-// the drain event emission and buffering.
-
-
-
-module.exports = Writable;
-
-/*<replacement>*/
-var processNextTick = __webpack_require__(17);
-/*</replacement>*/
-
-/*<replacement>*/
-var asyncWrite = !process.browser && ['v0.10', 'v0.9.'].indexOf(process.version.slice(0, 5)) > -1 ? setImmediate : processNextTick;
-/*</replacement>*/
-
-/*<replacement>*/
-var Buffer = __webpack_require__(3).Buffer;
-/*</replacement>*/
-
-Writable.WritableState = WritableState;
-
-/*<replacement>*/
-var util = __webpack_require__(10);
-util.inherits = __webpack_require__(8);
-/*</replacement>*/
-
-/*<replacement>*/
-var internalUtil = {
-  deprecate: __webpack_require__(61)
-};
-/*</replacement>*/
-
-/*<replacement>*/
-var Stream;
-(function () {
-  try {
-    Stream = __webpack_require__(12);
-  } catch (_) {} finally {
-    if (!Stream) Stream = __webpack_require__(13).EventEmitter;
-  }
-})();
-/*</replacement>*/
-
-var Buffer = __webpack_require__(3).Buffer;
-
-util.inherits(Writable, Stream);
-
-function nop() {}
-
-function WriteReq(chunk, encoding, cb) {
-  this.chunk = chunk;
-  this.encoding = encoding;
-  this.callback = cb;
-  this.next = null;
-}
-
-var Duplex;
-function WritableState(options, stream) {
-  Duplex = Duplex || __webpack_require__(6);
-
-  options = options || {};
-
-  // object stream flag to indicate whether or not this stream
-  // contains buffers or objects.
-  this.objectMode = !!options.objectMode;
-
-  if (stream instanceof Duplex) this.objectMode = this.objectMode || !!options.writableObjectMode;
-
-  // the point at which write() starts returning false
-  // Note: 0 is a valid value, means that we always return false if
-  // the entire buffer is not flushed immediately on write()
-  var hwm = options.highWaterMark;
-  var defaultHwm = this.objectMode ? 16 : 16 * 1024;
-  this.highWaterMark = hwm || hwm === 0 ? hwm : defaultHwm;
-
-  // cast to ints.
-  this.highWaterMark = ~ ~this.highWaterMark;
-
-  this.needDrain = false;
-  // at the start of calling end()
-  this.ending = false;
-  // when end() has been called, and returned
-  this.ended = false;
-  // when 'finish' is emitted
-  this.finished = false;
-
-  // should we decode strings into buffers before passing to _write?
-  // this is here so that some node-core streams can optimize string
-  // handling at a lower level.
-  var noDecode = options.decodeStrings === false;
-  this.decodeStrings = !noDecode;
-
-  // Crypto is kind of old and crusty.  Historically, its default string
-  // encoding is 'binary' so we have to make this configurable.
-  // Everything else in the universe uses 'utf8', though.
-  this.defaultEncoding = options.defaultEncoding || 'utf8';
-
-  // not an actual buffer we keep track of, but a measurement
-  // of how much we're waiting to get pushed to some underlying
-  // socket or file.
-  this.length = 0;
-
-  // a flag to see when we're in the middle of a write.
-  this.writing = false;
-
-  // when true all writes will be buffered until .uncork() call
-  this.corked = 0;
-
-  // a flag to be able to tell if the onwrite cb is called immediately,
-  // or on a later tick.  We set this to true at first, because any
-  // actions that shouldn't happen until "later" should generally also
-  // not happen before the first write call.
-  this.sync = true;
-
-  // a flag to know if we're processing previously buffered items, which
-  // may call the _write() callback in the same tick, so that we don't
-  // end up in an overlapped onwrite situation.
-  this.bufferProcessing = false;
-
-  // the callback that's passed to _write(chunk,cb)
-  this.onwrite = function (er) {
-    onwrite(stream, er);
-  };
-
-  // the callback that the user supplies to write(chunk,encoding,cb)
-  this.writecb = null;
-
-  // the amount that is being written when _write is called.
-  this.writelen = 0;
-
-  this.bufferedRequest = null;
-  this.lastBufferedRequest = null;
-
-  // number of pending user-supplied write callbacks
-  // this must be 0 before 'finish' can be emitted
-  this.pendingcb = 0;
-
-  // emit prefinish if the only thing we're waiting for is _write cbs
-  // This is relevant for synchronous Transform streams
-  this.prefinished = false;
-
-  // True if the error was already emitted and should not be thrown again
-  this.errorEmitted = false;
-
-  // count buffered requests
-  this.bufferedRequestCount = 0;
-
-  // create the two objects needed to store the corked requests
-  // they are not a linked list, as no new elements are inserted in there
-  this.corkedRequestsFree = new CorkedRequest(this);
-  this.corkedRequestsFree.next = new CorkedRequest(this);
-}
-
-WritableState.prototype.getBuffer = function writableStateGetBuffer() {
-  var current = this.bufferedRequest;
-  var out = [];
-  while (current) {
-    out.push(current);
-    current = current.next;
-  }
-  return out;
-};
-
-(function () {
-  try {
-    Object.defineProperty(WritableState.prototype, 'buffer', {
-      get: internalUtil.deprecate(function () {
-        return this.getBuffer();
-      }, '_writableState.buffer is deprecated. Use _writableState.getBuffer ' + 'instead.')
-    });
-  } catch (_) {}
-})();
-
-var Duplex;
-function Writable(options) {
-  Duplex = Duplex || __webpack_require__(6);
-
-  // Writable ctor is applied to Duplexes, though they're not
-  // instanceof Writable, they're instanceof Readable.
-  if (!(this instanceof Writable) && !(this instanceof Duplex)) return new Writable(options);
-
-  this._writableState = new WritableState(options, this);
-
-  // legacy.
-  this.writable = true;
-
-  if (options) {
-    if (typeof options.write === 'function') this._write = options.write;
-
-    if (typeof options.writev === 'function') this._writev = options.writev;
-  }
-
-  Stream.call(this);
-}
-
-// Otherwise people can pipe Writable streams, which is just wrong.
-Writable.prototype.pipe = function () {
-  this.emit('error', new Error('Cannot pipe. Not readable.'));
-};
-
-function writeAfterEnd(stream, cb) {
-  var er = new Error('write after end');
-  // TODO: defer error events consistently everywhere, not just the cb
-  stream.emit('error', er);
-  processNextTick(cb, er);
-}
-
-// If we get something that is not a buffer, string, null, or undefined,
-// and we're not in objectMode, then that's an error.
-// Otherwise stream chunks are all considered to be of length=1, and the
-// watermarks determine how many objects to keep in the buffer, rather than
-// how many bytes or characters.
-function validChunk(stream, state, chunk, cb) {
-  var valid = true;
-
-  if (!Buffer.isBuffer(chunk) && typeof chunk !== 'string' && chunk !== null && chunk !== undefined && !state.objectMode) {
-    var er = new TypeError('Invalid non-string/buffer chunk');
-    stream.emit('error', er);
-    processNextTick(cb, er);
-    valid = false;
-  }
-  return valid;
-}
-
-Writable.prototype.write = function (chunk, encoding, cb) {
-  var state = this._writableState;
-  var ret = false;
-
-  if (typeof encoding === 'function') {
-    cb = encoding;
-    encoding = null;
-  }
-
-  if (Buffer.isBuffer(chunk)) encoding = 'buffer';else if (!encoding) encoding = state.defaultEncoding;
-
-  if (typeof cb !== 'function') cb = nop;
-
-  if (state.ended) writeAfterEnd(this, cb);else if (validChunk(this, state, chunk, cb)) {
-    state.pendingcb++;
-    ret = writeOrBuffer(this, state, chunk, encoding, cb);
-  }
-
-  return ret;
-};
-
-Writable.prototype.cork = function () {
-  var state = this._writableState;
-
-  state.corked++;
-};
-
-Writable.prototype.uncork = function () {
-  var state = this._writableState;
-
-  if (state.corked) {
-    state.corked--;
-
-    if (!state.writing && !state.corked && !state.finished && !state.bufferProcessing && state.bufferedRequest) clearBuffer(this, state);
-  }
-};
-
-Writable.prototype.setDefaultEncoding = function setDefaultEncoding(encoding) {
-  // node::ParseEncoding() requires lower case.
-  if (typeof encoding === 'string') encoding = encoding.toLowerCase();
-  if (!(['hex', 'utf8', 'utf-8', 'ascii', 'binary', 'base64', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le', 'raw'].indexOf((encoding + '').toLowerCase()) > -1)) throw new TypeError('Unknown encoding: ' + encoding);
-  this._writableState.defaultEncoding = encoding;
-};
-
-function decodeChunk(state, chunk, encoding) {
-  if (!state.objectMode && state.decodeStrings !== false && typeof chunk === 'string') {
-    chunk = new Buffer(chunk, encoding);
-  }
-  return chunk;
-}
-
-// if we're already writing something, then just put this
-// in the queue, and wait our turn.  Otherwise, call _write
-// If we return false, then we need a drain event, so set that flag.
-function writeOrBuffer(stream, state, chunk, encoding, cb) {
-  chunk = decodeChunk(state, chunk, encoding);
-
-  if (Buffer.isBuffer(chunk)) encoding = 'buffer';
-  var len = state.objectMode ? 1 : chunk.length;
-
-  state.length += len;
-
-  var ret = state.length < state.highWaterMark;
-  // we must ensure that previous needDrain will not be reset to false.
-  if (!ret) state.needDrain = true;
-
-  if (state.writing || state.corked) {
-    var last = state.lastBufferedRequest;
-    state.lastBufferedRequest = new WriteReq(chunk, encoding, cb);
-    if (last) {
-      last.next = state.lastBufferedRequest;
-    } else {
-      state.bufferedRequest = state.lastBufferedRequest;
-    }
-    state.bufferedRequestCount += 1;
-  } else {
-    doWrite(stream, state, false, len, chunk, encoding, cb);
-  }
-
-  return ret;
-}
-
-function doWrite(stream, state, writev, len, chunk, encoding, cb) {
-  state.writelen = len;
-  state.writecb = cb;
-  state.writing = true;
-  state.sync = true;
-  if (writev) stream._writev(chunk, state.onwrite);else stream._write(chunk, encoding, state.onwrite);
-  state.sync = false;
-}
-
-function onwriteError(stream, state, sync, er, cb) {
-  --state.pendingcb;
-  if (sync) processNextTick(cb, er);else cb(er);
-
-  stream._writableState.errorEmitted = true;
-  stream.emit('error', er);
-}
-
-function onwriteStateUpdate(state) {
-  state.writing = false;
-  state.writecb = null;
-  state.length -= state.writelen;
-  state.writelen = 0;
-}
-
-function onwrite(stream, er) {
-  var state = stream._writableState;
-  var sync = state.sync;
-  var cb = state.writecb;
-
-  onwriteStateUpdate(state);
-
-  if (er) onwriteError(stream, state, sync, er, cb);else {
-    // Check if we're actually ready to finish, but don't emit yet
-    var finished = needFinish(state);
-
-    if (!finished && !state.corked && !state.bufferProcessing && state.bufferedRequest) {
-      clearBuffer(stream, state);
-    }
-
-    if (sync) {
-      /*<replacement>*/
-      asyncWrite(afterWrite, stream, state, finished, cb);
-      /*</replacement>*/
-    } else {
-        afterWrite(stream, state, finished, cb);
-      }
-  }
-}
-
-function afterWrite(stream, state, finished, cb) {
-  if (!finished) onwriteDrain(stream, state);
-  state.pendingcb--;
-  cb();
-  finishMaybe(stream, state);
-}
-
-// Must force callback to be called on nextTick, so that we don't
-// emit 'drain' before the write() consumer gets the 'false' return
-// value, and has a chance to attach a 'drain' listener.
-function onwriteDrain(stream, state) {
-  if (state.length === 0 && state.needDrain) {
-    state.needDrain = false;
-    stream.emit('drain');
-  }
-}
-
-// if there's something in the buffer waiting, then process it
-function clearBuffer(stream, state) {
-  state.bufferProcessing = true;
-  var entry = state.bufferedRequest;
-
-  if (stream._writev && entry && entry.next) {
-    // Fast case, write everything using _writev()
-    var l = state.bufferedRequestCount;
-    var buffer = new Array(l);
-    var holder = state.corkedRequestsFree;
-    holder.entry = entry;
-
-    var count = 0;
-    while (entry) {
-      buffer[count] = entry;
-      entry = entry.next;
-      count += 1;
-    }
-
-    doWrite(stream, state, true, state.length, buffer, '', holder.finish);
-
-    // doWrite is always async, defer these to save a bit of time
-    // as the hot path ends with doWrite
-    state.pendingcb++;
-    state.lastBufferedRequest = null;
-    state.corkedRequestsFree = holder.next;
-    holder.next = null;
-  } else {
-    // Slow case, write chunks one-by-one
-    while (entry) {
-      var chunk = entry.chunk;
-      var encoding = entry.encoding;
-      var cb = entry.callback;
-      var len = state.objectMode ? 1 : chunk.length;
-
-      doWrite(stream, state, false, len, chunk, encoding, cb);
-      entry = entry.next;
-      // if we didn't call the onwrite immediately, then
-      // it means that we need to wait until it does.
-      // also, that means that the chunk and cb are currently
-      // being processed, so move the buffer counter past them.
-      if (state.writing) {
-        break;
-      }
-    }
-
-    if (entry === null) state.lastBufferedRequest = null;
-  }
-
-  state.bufferedRequestCount = 0;
-  state.bufferedRequest = entry;
-  state.bufferProcessing = false;
-}
-
-Writable.prototype._write = function (chunk, encoding, cb) {
-  cb(new Error('not implemented'));
-};
-
-Writable.prototype._writev = null;
-
-Writable.prototype.end = function (chunk, encoding, cb) {
-  var state = this._writableState;
-
-  if (typeof chunk === 'function') {
-    cb = chunk;
-    chunk = null;
-    encoding = null;
-  } else if (typeof encoding === 'function') {
-    cb = encoding;
-    encoding = null;
-  }
-
-  if (chunk !== null && chunk !== undefined) this.write(chunk, encoding);
-
-  // .end() fully uncorks
-  if (state.corked) {
-    state.corked = 1;
-    this.uncork();
-  }
-
-  // ignore unnecessary end() calls.
-  if (!state.ending && !state.finished) endWritable(this, state, cb);
-};
-
-function needFinish(state) {
-  return state.ending && state.length === 0 && state.bufferedRequest === null && !state.finished && !state.writing;
-}
-
-function prefinish(stream, state) {
-  if (!state.prefinished) {
-    state.prefinished = true;
-    stream.emit('prefinish');
-  }
-}
-
-function finishMaybe(stream, state) {
-  var need = needFinish(state);
-  if (need) {
-    if (state.pendingcb === 0) {
-      prefinish(stream, state);
-      state.finished = true;
-      stream.emit('finish');
-    } else {
-      prefinish(stream, state);
-    }
-  }
-  return need;
-}
-
-function endWritable(stream, state, cb) {
-  state.ending = true;
-  finishMaybe(stream, state);
-  if (cb) {
-    if (state.finished) processNextTick(cb);else stream.once('finish', cb);
-  }
-  state.ended = true;
-  stream.writable = false;
-}
-
-// It seems a linked list but it is not
-// there will be only 2 of these for each stream
-function CorkedRequest(state) {
-  var _this = this;
-
-  this.next = null;
-  this.entry = null;
-
-  this.finish = function (err) {
-    var entry = _this.entry;
-    _this.entry = null;
-    while (entry) {
-      var cb = entry.callback;
-      state.pendingcb--;
-      cb(err);
-      entry = entry.next;
-    }
-    if (state.corkedRequestsFree) {
-      state.corkedRequestsFree.next = _this;
-    } else {
-      state.corkedRequestsFree = _this;
-    }
-  };
-}
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14), __webpack_require__(59).setImmediate))
-
-/***/ }),
-/* 19 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// a transform stream is a readable/writable stream where you do
-// something with the data.  Sometimes it's called a "filter",
-// but that's not a great name for it, since that implies a thing where
-// some bits pass through, and others are simply ignored.  (That would
-// be a valid example of a transform, of course.)
-//
-// While the output is causally related to the input, it's not a
-// necessarily symmetric or synchronous transformation.  For example,
-// a zlib stream might take multiple plain-text writes(), and then
-// emit a single compressed chunk some time in the future.
-//
-// Here's how this works:
-//
-// The Transform stream has all the aspects of the readable and writable
-// stream classes.  When you write(chunk), that calls _write(chunk,cb)
-// internally, and returns false if there's a lot of pending writes
-// buffered up.  When you call read(), that calls _read(n) until
-// there's enough pending readable data buffered up.
-//
-// In a transform stream, the written data is placed in a buffer.  When
-// _read(n) is called, it transforms the queued up data, calling the
-// buffered _write cb's as it consumes chunks.  If consuming a single
-// written chunk would result in multiple output chunks, then the first
-// outputted bit calls the readcb, and subsequent chunks just go into
-// the read buffer, and will cause it to emit 'readable' if necessary.
-//
-// This way, back-pressure is actually determined by the reading side,
-// since _read has to be called to start processing a new chunk.  However,
-// a pathological inflate type of transform can cause excessive buffering
-// here.  For example, imagine a stream where every byte of input is
-// interpreted as an integer from 0-255, and then results in that many
-// bytes of output.  Writing the 4 bytes {ff,ff,ff,ff} would result in
-// 1kb of data being output.  In this case, you could write a very small
-// amount of input, and end up with a very large amount of output.  In
-// such a pathological inflating mechanism, there'd be no way to tell
-// the system to stop doing the transform.  A single 4MB write could
-// cause the system to run out of memory.
-//
-// However, even in such a pathological case, only a single written chunk
-// would be consumed, and then the rest would wait (un-transformed) until
-// the results of the previous transformed chunk were consumed.
-
-
-
-module.exports = Transform;
-
-var Duplex = __webpack_require__(6);
-
-/*<replacement>*/
-var util = __webpack_require__(10);
-util.inherits = __webpack_require__(8);
-/*</replacement>*/
-
-util.inherits(Transform, Duplex);
-
-function TransformState(stream) {
-  this.afterTransform = function (er, data) {
-    return afterTransform(stream, er, data);
-  };
-
-  this.needTransform = false;
-  this.transforming = false;
-  this.writecb = null;
-  this.writechunk = null;
-  this.writeencoding = null;
-}
-
-function afterTransform(stream, er, data) {
-  var ts = stream._transformState;
-  ts.transforming = false;
-
-  var cb = ts.writecb;
-
-  if (!cb) return stream.emit('error', new Error('no writecb in Transform class'));
-
-  ts.writechunk = null;
-  ts.writecb = null;
-
-  if (data !== null && data !== undefined) stream.push(data);
-
-  cb(er);
-
-  var rs = stream._readableState;
-  rs.reading = false;
-  if (rs.needReadable || rs.length < rs.highWaterMark) {
-    stream._read(rs.highWaterMark);
-  }
-}
-
-function Transform(options) {
-  if (!(this instanceof Transform)) return new Transform(options);
-
-  Duplex.call(this, options);
-
-  this._transformState = new TransformState(this);
-
-  // when the writable side finishes, then flush out anything remaining.
-  var stream = this;
-
-  // start out asking for a readable event once data is transformed.
-  this._readableState.needReadable = true;
-
-  // we have implemented the _read method, and done the other things
-  // that Readable wants before the first _read call, so unset the
-  // sync guard flag.
-  this._readableState.sync = false;
-
-  if (options) {
-    if (typeof options.transform === 'function') this._transform = options.transform;
-
-    if (typeof options.flush === 'function') this._flush = options.flush;
-  }
-
-  this.once('prefinish', function () {
-    if (typeof this._flush === 'function') this._flush(function (er) {
-      done(stream, er);
-    });else done(stream);
-  });
-}
-
-Transform.prototype.push = function (chunk, encoding) {
-  this._transformState.needTransform = false;
-  return Duplex.prototype.push.call(this, chunk, encoding);
-};
-
-// This is the part where you do stuff!
-// override this function in implementation classes.
-// 'chunk' is an input chunk.
-//
-// Call `push(newChunk)` to pass along transformed output
-// to the readable side.  You may call 'push' zero or more times.
-//
-// Call `cb(err)` when you are done with this chunk.  If you pass
-// an error, then that'll put the hurt on the whole operation.  If you
-// never call cb(), then you'll never get another chunk.
-Transform.prototype._transform = function (chunk, encoding, cb) {
-  throw new Error('not implemented');
-};
-
-Transform.prototype._write = function (chunk, encoding, cb) {
-  var ts = this._transformState;
-  ts.writecb = cb;
-  ts.writechunk = chunk;
-  ts.writeencoding = encoding;
-  if (!ts.transforming) {
-    var rs = this._readableState;
-    if (ts.needTransform || rs.needReadable || rs.length < rs.highWaterMark) this._read(rs.highWaterMark);
-  }
-};
-
-// Doesn't matter what the args are here.
-// _transform does all the work.
-// That we got here means that the readable side wants more data.
-Transform.prototype._read = function (n) {
-  var ts = this._transformState;
-
-  if (ts.writechunk !== null && ts.writecb && !ts.transforming) {
-    ts.transforming = true;
-    this._transform(ts.writechunk, ts.writeencoding, ts.afterTransform);
-  } else {
-    // mark that we need a transform, so that any data that comes in
-    // will get processed, now that we've asked for it.
-    ts.needTransform = true;
-  }
-};
-
-function done(stream, er) {
-  if (er) return stream.emit('error', er);
-
-  // if there's nothing in the write buffer, then that means
-  // that nothing more will ever be provided
-  var ws = stream._writableState;
-  var ts = stream._transformState;
-
-  if (ws.length) throw new Error('calling transform done when ws.length != 0');
-
-  if (ts.transforming) throw new Error('calling transform done when still transforming');
-
-  return stream.push(null);
-}
-
-/***/ }),
-/* 20 */
-/***/ (function(module, exports) {
-
-module.exports = function(it){
-  return typeof it === 'object' ? it !== null : typeof it === 'function';
-};
-
-/***/ }),
-/* 21 */
-/***/ (function(module, exports, __webpack_require__) {
-
-// Thank's IE8 for his funny defineProperty
-module.exports = !__webpack_require__(33)(function(){
-  return Object.defineProperty({}, 'a', {get: function(){ return 7; }}).a != 7;
-});
-
-/***/ }),
-/* 22 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var external = __webpack_require__(11);
-var DataWorker = __webpack_require__(37);
-var DataLengthProbe = __webpack_require__(38);
-var Crc32Probe = __webpack_require__(39);
-var DataLengthProbe = __webpack_require__(38);
-
-/**
- * Represent a compressed object, with everything needed to decompress it.
- * @constructor
- * @param {number} compressedSize the size of the data compressed.
- * @param {number} uncompressedSize the size of the data after decompression.
- * @param {number} crc32 the crc32 of the decompressed file.
- * @param {object} compression the type of compression, see lib/compressions.js.
- * @param {String|ArrayBuffer|Uint8Array|Buffer} data the compressed data.
- */
-function CompressedObject(compressedSize, uncompressedSize, crc32, compression, data) {
-    this.compressedSize = compressedSize;
-    this.uncompressedSize = uncompressedSize;
-    this.crc32 = crc32;
-    this.compression = compression;
-    this.compressedContent = data;
-}
-
-CompressedObject.prototype = {
-    /**
-     * Create a worker to get the uncompressed content.
-     * @return {GenericWorker} the worker.
-     */
-    getContentWorker : function () {
-        var worker = new DataWorker(external.Promise.resolve(this.compressedContent))
-        .pipe(this.compression.uncompressWorker())
-        .pipe(new DataLengthProbe("data_length"));
-
-        var that = this;
-        worker.on("end", function () {
-            if(this.streamInfo['data_length'] !== that.uncompressedSize) {
-                throw new Error("Bug : uncompressed data size mismatch");
-            }
-        });
-        return worker;
-    },
-    /**
-     * Create a worker to get the compressed content.
-     * @return {GenericWorker} the worker.
-     */
-    getCompressedWorker : function () {
-        return new DataWorker(external.Promise.resolve(this.compressedContent))
-        .withStreamInfo("compressedSize", this.compressedSize)
-        .withStreamInfo("uncompressedSize", this.uncompressedSize)
-        .withStreamInfo("crc32", this.crc32)
-        .withStreamInfo("compression", this.compression)
-        ;
-    }
-};
-
-/**
- * Chain the given worker with other workers to compress the content with the
- * given compresion.
- * @param {GenericWorker} uncompressedWorker the worker to pipe.
- * @param {Object} compression the compression object.
- * @param {Object} compressionOptions the options to use when compressing.
- * @return {GenericWorker} the new worker compressing the content.
- */
-CompressedObject.createWorkerFrom = function (uncompressedWorker, compression, compressionOptions) {
-    return uncompressedWorker
-    .pipe(new Crc32Probe())
-    .pipe(new DataLengthProbe("uncompressedSize"))
-    .pipe(compression.compressWorker(compressionOptions))
-    .pipe(new DataLengthProbe("compressedSize"))
-    .withStreamInfo("compression", compression);
-};
-
-module.exports = CompressedObject;
-
-
-/***/ }),
-/* 23 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var utils = __webpack_require__(0);
-
-/**
- * The following functions come from pako, from pako/lib/zlib/crc32.js
- * released under the MIT license, see pako https://github.com/nodeca/pako/
- */
-
-// Use ordinary array, since untyped makes no boost here
-function makeTable() {
-    var c, table = [];
-
-    for(var n =0; n < 256; n++){
-        c = n;
-        for(var k =0; k < 8; k++){
-            c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
-        }
-        table[n] = c;
-    }
-
-    return table;
-}
-
-// Create table on load. Just 255 signed longs. Not a problem.
-var crcTable = makeTable();
-
-
-function crc32(crc, buf, len, pos) {
-    var t = crcTable, end = pos + len;
-
-    crc = crc ^ (-1);
-
-    for (var i = pos; i < end; i++ ) {
-        crc = (crc >>> 8) ^ t[(crc ^ buf[i]) & 0xFF];
-    }
-
-    return (crc ^ (-1)); // >>> 0;
-}
-
-// That's all for the pako functions.
-
-/**
- * Compute the crc32 of a string.
- * This is almost the same as the function crc32, but for strings. Using the
- * same function for the two use cases leads to horrible performances.
- * @param {Number} crc the starting value of the crc.
- * @param {String} str the string to use.
- * @param {Number} len the length of the string.
- * @param {Number} pos the starting position for the crc32 computation.
- * @return {Number} the computed crc32.
- */
-function crc32str(crc, str, len, pos) {
-    var t = crcTable, end = pos + len;
-
-    crc = crc ^ (-1);
-
-    for (var i = pos; i < end; i++ ) {
-        crc = (crc >>> 8) ^ t[(crc ^ str.charCodeAt(i)) & 0xFF];
-    }
-
-    return (crc ^ (-1)); // >>> 0;
-}
-
-module.exports = function crc32wrapper(input, crc) {
-    if (typeof input === "undefined" || !input.length) {
-        return 0;
-    }
-
-    var isArray = utils.getTypeOf(input) !== "string";
-
-    if(isArray) {
-        return crc32(crc|0, input, input.length, 0);
-    } else {
-        return crc32str(crc|0, input, input.length, 0);
-    }
-};
-
-
-/***/ }),
-/* 24 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-// (C) 1995-2013 Jean-loup Gailly and Mark Adler
-// (C) 2014-2017 Vitaly Puzrin and Andrey Tupitsin
-//
-// This software is provided 'as-is', without any express or implied
-// warranty. In no event will the authors be held liable for any damages
-// arising from the use of this software.
-//
-// Permission is granted to anyone to use this software for any purpose,
-// including commercial applications, and to alter it and redistribute it
-// freely, subject to the following restrictions:
-//
-// 1. The origin of this software must not be misrepresented; you must not
-//   claim that you wrote the original software. If you use this software
-//   in a product, an acknowledgment in the product documentation would be
-//   appreciated but is not required.
-// 2. Altered source versions must be plainly marked as such, and must not be
-//   misrepresented as being the original software.
-// 3. This notice may not be removed or altered from any source distribution.
-
-module.exports = {
-  2:      'need dictionary',     /* Z_NEED_DICT       2  */
-  1:      'stream end',          /* Z_STREAM_END      1  */
-  0:      '',                    /* Z_OK              0  */
-  '-1':   'file error',          /* Z_ERRNO         (-1) */
-  '-2':   'stream error',        /* Z_STREAM_ERROR  (-2) */
-  '-3':   'data error',          /* Z_DATA_ERROR    (-3) */
-  '-4':   'insufficient memory', /* Z_MEM_ERROR     (-4) */
-  '-5':   'buffer error',        /* Z_BUF_ERROR     (-5) */
-  '-6':   'incompatible version' /* Z_VERSION_ERROR (-6) */
-};
-
-
-/***/ }),
-/* 25 */
-/***/ (function(module, exports) {
-
-var toString = {}.toString;
-
-module.exports = Array.isArray || function (arr) {
-  return toString.call(arr) == '[object Array]';
-};
-
-
-/***/ }),
-/* 26 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/*
- * This file is used by module bundlers (browserify/webpack/etc) when
- * including a stream implementation. We use "readable-stream" to get a
- * consistent behavior between nodejs versions but bundlers often have a shim
- * for "stream". Using this shim greatly improve the compatibility and greatly
- * reduce the final size of the bundle (only one stream implementation, not
- * two).
- */
-module.exports = __webpack_require__(12);
-
-
-/***/ }),
-/* 27 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(process) {
-
-module.exports = Readable;
-
-/*<replacement>*/
-var processNextTick = __webpack_require__(17);
-/*</replacement>*/
-
-/*<replacement>*/
-var isArray = __webpack_require__(25);
-/*</replacement>*/
-
-/*<replacement>*/
-var Buffer = __webpack_require__(3).Buffer;
-/*</replacement>*/
-
-Readable.ReadableState = ReadableState;
-
-var EE = __webpack_require__(13);
-
-/*<replacement>*/
-var EElistenerCount = function (emitter, type) {
-  return emitter.listeners(type).length;
-};
-/*</replacement>*/
-
-/*<replacement>*/
-var Stream;
-(function () {
-  try {
-    Stream = __webpack_require__(12);
-  } catch (_) {} finally {
-    if (!Stream) Stream = __webpack_require__(13).EventEmitter;
-  }
-})();
-/*</replacement>*/
-
-var Buffer = __webpack_require__(3).Buffer;
-
-/*<replacement>*/
-var util = __webpack_require__(10);
-util.inherits = __webpack_require__(8);
-/*</replacement>*/
-
-/*<replacement>*/
-var debugUtil = __webpack_require__(58);
-var debug = undefined;
-if (debugUtil && debugUtil.debuglog) {
-  debug = debugUtil.debuglog('stream');
-} else {
-  debug = function () {};
-}
-/*</replacement>*/
-
-var StringDecoder;
-
-util.inherits(Readable, Stream);
-
-var Duplex;
-function ReadableState(options, stream) {
-  Duplex = Duplex || __webpack_require__(6);
-
-  options = options || {};
-
-  // object stream flag. Used to make read(n) ignore n and to
-  // make all the buffer merging and length checks go away
-  this.objectMode = !!options.objectMode;
-
-  if (stream instanceof Duplex) this.objectMode = this.objectMode || !!options.readableObjectMode;
-
-  // the point at which it stops calling _read() to fill the buffer
-  // Note: 0 is a valid value, means "don't call _read preemptively ever"
-  var hwm = options.highWaterMark;
-  var defaultHwm = this.objectMode ? 16 : 16 * 1024;
-  this.highWaterMark = hwm || hwm === 0 ? hwm : defaultHwm;
-
-  // cast to ints.
-  this.highWaterMark = ~ ~this.highWaterMark;
-
-  this.buffer = [];
-  this.length = 0;
-  this.pipes = null;
-  this.pipesCount = 0;
-  this.flowing = null;
-  this.ended = false;
-  this.endEmitted = false;
-  this.reading = false;
-
-  // a flag to be able to tell if the onwrite cb is called immediately,
-  // or on a later tick.  We set this to true at first, because any
-  // actions that shouldn't happen until "later" should generally also
-  // not happen before the first write call.
-  this.sync = true;
-
-  // whenever we return null, then we set a flag to say
-  // that we're awaiting a 'readable' event emission.
-  this.needReadable = false;
-  this.emittedReadable = false;
-  this.readableListening = false;
-  this.resumeScheduled = false;
-
-  // Crypto is kind of old and crusty.  Historically, its default string
-  // encoding is 'binary' so we have to make this configurable.
-  // Everything else in the universe uses 'utf8', though.
-  this.defaultEncoding = options.defaultEncoding || 'utf8';
-
-  // when piping, we only care about 'readable' events that happen
-  // after read()ing all the bytes and not getting any pushback.
-  this.ranOut = false;
-
-  // the number of writers that are awaiting a drain event in .pipe()s
-  this.awaitDrain = 0;
-
-  // if true, a maybeReadMore has been scheduled
-  this.readingMore = false;
-
-  this.decoder = null;
-  this.encoding = null;
-  if (options.encoding) {
-    if (!StringDecoder) StringDecoder = __webpack_require__(28).StringDecoder;
-    this.decoder = new StringDecoder(options.encoding);
-    this.encoding = options.encoding;
-  }
-}
-
-var Duplex;
-function Readable(options) {
-  Duplex = Duplex || __webpack_require__(6);
-
-  if (!(this instanceof Readable)) return new Readable(options);
-
-  this._readableState = new ReadableState(options, this);
-
-  // legacy
-  this.readable = true;
-
-  if (options && typeof options.read === 'function') this._read = options.read;
-
-  Stream.call(this);
-}
-
-// Manually shove something into the read() buffer.
-// This returns true if the highWaterMark has not been hit yet,
-// similar to how Writable.write() returns true if you should
-// write() some more.
-Readable.prototype.push = function (chunk, encoding) {
-  var state = this._readableState;
-
-  if (!state.objectMode && typeof chunk === 'string') {
-    encoding = encoding || state.defaultEncoding;
-    if (encoding !== state.encoding) {
-      chunk = new Buffer(chunk, encoding);
-      encoding = '';
-    }
-  }
-
-  return readableAddChunk(this, state, chunk, encoding, false);
-};
-
-// Unshift should *always* be something directly out of read()
-Readable.prototype.unshift = function (chunk) {
-  var state = this._readableState;
-  return readableAddChunk(this, state, chunk, '', true);
-};
-
-Readable.prototype.isPaused = function () {
-  return this._readableState.flowing === false;
-};
-
-function readableAddChunk(stream, state, chunk, encoding, addToFront) {
-  var er = chunkInvalid(state, chunk);
-  if (er) {
-    stream.emit('error', er);
-  } else if (chunk === null) {
-    state.reading = false;
-    onEofChunk(stream, state);
-  } else if (state.objectMode || chunk && chunk.length > 0) {
-    if (state.ended && !addToFront) {
-      var e = new Error('stream.push() after EOF');
-      stream.emit('error', e);
-    } else if (state.endEmitted && addToFront) {
-      var e = new Error('stream.unshift() after end event');
-      stream.emit('error', e);
-    } else {
-      var skipAdd;
-      if (state.decoder && !addToFront && !encoding) {
-        chunk = state.decoder.write(chunk);
-        skipAdd = !state.objectMode && chunk.length === 0;
-      }
-
-      if (!addToFront) state.reading = false;
-
-      // Don't add to the buffer if we've decoded to an empty string chunk and
-      // we're not in object mode
-      if (!skipAdd) {
-        // if we want the data now, just emit it.
-        if (state.flowing && state.length === 0 && !state.sync) {
-          stream.emit('data', chunk);
-          stream.read(0);
-        } else {
-          // update the buffer info.
-          state.length += state.objectMode ? 1 : chunk.length;
-          if (addToFront) state.buffer.unshift(chunk);else state.buffer.push(chunk);
-
-          if (state.needReadable) emitReadable(stream);
-        }
-      }
-
-      maybeReadMore(stream, state);
-    }
-  } else if (!addToFront) {
-    state.reading = false;
-  }
-
-  return needMoreData(state);
-}
-
-// if it's past the high water mark, we can push in some more.
-// Also, if we have no data yet, we can stand some
-// more bytes.  This is to work around cases where hwm=0,
-// such as the repl.  Also, if the push() triggered a
-// readable event, and the user called read(largeNumber) such that
-// needReadable was set, then we ought to push more, so that another
-// 'readable' event will be triggered.
-function needMoreData(state) {
-  return !state.ended && (state.needReadable || state.length < state.highWaterMark || state.length === 0);
-}
-
-// backwards compatibility.
-Readable.prototype.setEncoding = function (enc) {
-  if (!StringDecoder) StringDecoder = __webpack_require__(28).StringDecoder;
-  this._readableState.decoder = new StringDecoder(enc);
-  this._readableState.encoding = enc;
-  return this;
-};
-
-// Don't raise the hwm > 8MB
-var MAX_HWM = 0x800000;
-function computeNewHighWaterMark(n) {
-  if (n >= MAX_HWM) {
-    n = MAX_HWM;
-  } else {
-    // Get the next highest power of 2
-    n--;
-    n |= n >>> 1;
-    n |= n >>> 2;
-    n |= n >>> 4;
-    n |= n >>> 8;
-    n |= n >>> 16;
-    n++;
-  }
-  return n;
-}
-
-function howMuchToRead(n, state) {
-  if (state.length === 0 && state.ended) return 0;
-
-  if (state.objectMode) return n === 0 ? 0 : 1;
-
-  if (n === null || isNaN(n)) {
-    // only flow one buffer at a time
-    if (state.flowing && state.buffer.length) return state.buffer[0].length;else return state.length;
-  }
-
-  if (n <= 0) return 0;
-
-  // If we're asking for more than the target buffer level,
-  // then raise the water mark.  Bump up to the next highest
-  // power of 2, to prevent increasing it excessively in tiny
-  // amounts.
-  if (n > state.highWaterMark) state.highWaterMark = computeNewHighWaterMark(n);
-
-  // don't have that much.  return null, unless we've ended.
-  if (n > state.length) {
-    if (!state.ended) {
-      state.needReadable = true;
-      return 0;
-    } else {
-      return state.length;
-    }
-  }
-
-  return n;
-}
-
-// you can override either this method, or the async _read(n) below.
-Readable.prototype.read = function (n) {
-  debug('read', n);
-  var state = this._readableState;
-  var nOrig = n;
-
-  if (typeof n !== 'number' || n > 0) state.emittedReadable = false;
-
-  // if we're doing read(0) to trigger a readable event, but we
-  // already have a bunch of data in the buffer, then just trigger
-  // the 'readable' event and move on.
-  if (n === 0 && state.needReadable && (state.length >= state.highWaterMark || state.ended)) {
-    debug('read: emitReadable', state.length, state.ended);
-    if (state.length === 0 && state.ended) endReadable(this);else emitReadable(this);
-    return null;
-  }
-
-  n = howMuchToRead(n, state);
-
-  // if we've ended, and we're now clear, then finish it up.
-  if (n === 0 && state.ended) {
-    if (state.length === 0) endReadable(this);
-    return null;
-  }
-
-  // All the actual chunk generation logic needs to be
-  // *below* the call to _read.  The reason is that in certain
-  // synthetic stream cases, such as passthrough streams, _read
-  // may be a completely synchronous operation which may change
-  // the state of the read buffer, providing enough data when
-  // before there was *not* enough.
-  //
-  // So, the steps are:
-  // 1. Figure out what the state of things will be after we do
-  // a read from the buffer.
-  //
-  // 2. If that resulting state will trigger a _read, then call _read.
-  // Note that this may be asynchronous, or synchronous.  Yes, it is
-  // deeply ugly to write APIs this way, but that still doesn't mean
-  // that the Readable class should behave improperly, as streams are
-  // designed to be sync/async agnostic.
-  // Take note if the _read call is sync or async (ie, if the read call
-  // has returned yet), so that we know whether or not it's safe to emit
-  // 'readable' etc.
-  //
-  // 3. Actually pull the requested chunks out of the buffer and return.
-
-  // if we need a readable event, then we need to do some reading.
-  var doRead = state.needReadable;
-  debug('need readable', doRead);
-
-  // if we currently have less than the highWaterMark, then also read some
-  if (state.length === 0 || state.length - n < state.highWaterMark) {
-    doRead = true;
-    debug('length less than watermark', doRead);
-  }
-
-  // however, if we've ended, then there's no point, and if we're already
-  // reading, then it's unnecessary.
-  if (state.ended || state.reading) {
-    doRead = false;
-    debug('reading or ended', doRead);
-  }
-
-  if (doRead) {
-    debug('do read');
-    state.reading = true;
-    state.sync = true;
-    // if the length is currently zero, then we *need* a readable event.
-    if (state.length === 0) state.needReadable = true;
-    // call internal read method
-    this._read(state.highWaterMark);
-    state.sync = false;
-  }
-
-  // If _read pushed data synchronously, then `reading` will be false,
-  // and we need to re-evaluate how much data we can return to the user.
-  if (doRead && !state.reading) n = howMuchToRead(nOrig, state);
-
-  var ret;
-  if (n > 0) ret = fromList(n, state);else ret = null;
-
-  if (ret === null) {
-    state.needReadable = true;
-    n = 0;
-  }
-
-  state.length -= n;
-
-  // If we have nothing in the buffer, then we want to know
-  // as soon as we *do* get something into the buffer.
-  if (state.length === 0 && !state.ended) state.needReadable = true;
-
-  // If we tried to read() past the EOF, then emit end on the next tick.
-  if (nOrig !== n && state.ended && state.length === 0) endReadable(this);
-
-  if (ret !== null) this.emit('data', ret);
-
-  return ret;
-};
-
-function chunkInvalid(state, chunk) {
-  var er = null;
-  if (!Buffer.isBuffer(chunk) && typeof chunk !== 'string' && chunk !== null && chunk !== undefined && !state.objectMode) {
-    er = new TypeError('Invalid non-string/buffer chunk');
-  }
-  return er;
-}
-
-function onEofChunk(stream, state) {
-  if (state.ended) return;
-  if (state.decoder) {
-    var chunk = state.decoder.end();
-    if (chunk && chunk.length) {
-      state.buffer.push(chunk);
-      state.length += state.objectMode ? 1 : chunk.length;
-    }
-  }
-  state.ended = true;
-
-  // emit 'readable' now to make sure it gets picked up.
-  emitReadable(stream);
-}
-
-// Don't emit readable right away in sync mode, because this can trigger
-// another read() call => stack overflow.  This way, it might trigger
-// a nextTick recursion warning, but that's not so bad.
-function emitReadable(stream) {
-  var state = stream._readableState;
-  state.needReadable = false;
-  if (!state.emittedReadable) {
-    debug('emitReadable', state.flowing);
-    state.emittedReadable = true;
-    if (state.sync) processNextTick(emitReadable_, stream);else emitReadable_(stream);
-  }
-}
-
-function emitReadable_(stream) {
-  debug('emit readable');
-  stream.emit('readable');
-  flow(stream);
-}
-
-// at this point, the user has presumably seen the 'readable' event,
-// and called read() to consume some data.  that may have triggered
-// in turn another _read(n) call, in which case reading = true if
-// it's in progress.
-// However, if we're not ended, or reading, and the length < hwm,
-// then go ahead and try to read some more preemptively.
-function maybeReadMore(stream, state) {
-  if (!state.readingMore) {
-    state.readingMore = true;
-    processNextTick(maybeReadMore_, stream, state);
-  }
-}
-
-function maybeReadMore_(stream, state) {
-  var len = state.length;
-  while (!state.reading && !state.flowing && !state.ended && state.length < state.highWaterMark) {
-    debug('maybeReadMore read 0');
-    stream.read(0);
-    if (len === state.length)
-      // didn't get any data, stop spinning.
-      break;else len = state.length;
-  }
-  state.readingMore = false;
-}
-
-// abstract method.  to be overridden in specific implementation classes.
-// call cb(er, data) where data is <= n in length.
-// for virtual (non-string, non-buffer) streams, "length" is somewhat
-// arbitrary, and perhaps not very meaningful.
-Readable.prototype._read = function (n) {
-  this.emit('error', new Error('not implemented'));
-};
-
-Readable.prototype.pipe = function (dest, pipeOpts) {
-  var src = this;
-  var state = this._readableState;
-
-  switch (state.pipesCount) {
-    case 0:
-      state.pipes = dest;
-      break;
-    case 1:
-      state.pipes = [state.pipes, dest];
-      break;
-    default:
-      state.pipes.push(dest);
-      break;
-  }
-  state.pipesCount += 1;
-  debug('pipe count=%d opts=%j', state.pipesCount, pipeOpts);
-
-  var doEnd = (!pipeOpts || pipeOpts.end !== false) && dest !== process.stdout && dest !== process.stderr;
-
-  var endFn = doEnd ? onend : cleanup;
-  if (state.endEmitted) processNextTick(endFn);else src.once('end', endFn);
-
-  dest.on('unpipe', onunpipe);
-  function onunpipe(readable) {
-    debug('onunpipe');
-    if (readable === src) {
-      cleanup();
-    }
-  }
-
-  function onend() {
-    debug('onend');
-    dest.end();
-  }
-
-  // when the dest drains, it reduces the awaitDrain counter
-  // on the source.  This would be more elegant with a .once()
-  // handler in flow(), but adding and removing repeatedly is
-  // too slow.
-  var ondrain = pipeOnDrain(src);
-  dest.on('drain', ondrain);
-
-  var cleanedUp = false;
-  function cleanup() {
-    debug('cleanup');
-    // cleanup event handlers once the pipe is broken
-    dest.removeListener('close', onclose);
-    dest.removeListener('finish', onfinish);
-    dest.removeListener('drain', ondrain);
-    dest.removeListener('error', onerror);
-    dest.removeListener('unpipe', onunpipe);
-    src.removeListener('end', onend);
-    src.removeListener('end', cleanup);
-    src.removeListener('data', ondata);
-
-    cleanedUp = true;
-
-    // if the reader is waiting for a drain event from this
-    // specific writer, then it would cause it to never start
-    // flowing again.
-    // So, if this is awaiting a drain, then we just call it now.
-    // If we don't know, then assume that we are waiting for one.
-    if (state.awaitDrain && (!dest._writableState || dest._writableState.needDrain)) ondrain();
-  }
-
-  src.on('data', ondata);
-  function ondata(chunk) {
-    debug('ondata');
-    var ret = dest.write(chunk);
-    if (false === ret) {
-      // If the user unpiped during `dest.write()`, it is possible
-      // to get stuck in a permanently paused state if that write
-      // also returned false.
-      if (state.pipesCount === 1 && state.pipes[0] === dest && src.listenerCount('data') === 1 && !cleanedUp) {
-        debug('false write response, pause', src._readableState.awaitDrain);
-        src._readableState.awaitDrain++;
-      }
-      src.pause();
-    }
-  }
-
-  // if the dest has an error, then stop piping into it.
-  // however, don't suppress the throwing behavior for this.
-  function onerror(er) {
-    debug('onerror', er);
-    unpipe();
-    dest.removeListener('error', onerror);
-    if (EElistenerCount(dest, 'error') === 0) dest.emit('error', er);
-  }
-  // This is a brutally ugly hack to make sure that our error handler
-  // is attached before any userland ones.  NEVER DO THIS.
-  if (!dest._events || !dest._events.error) dest.on('error', onerror);else if (isArray(dest._events.error)) dest._events.error.unshift(onerror);else dest._events.error = [onerror, dest._events.error];
-
-  // Both close and finish should trigger unpipe, but only once.
-  function onclose() {
-    dest.removeListener('finish', onfinish);
-    unpipe();
-  }
-  dest.once('close', onclose);
-  function onfinish() {
-    debug('onfinish');
-    dest.removeListener('close', onclose);
-    unpipe();
-  }
-  dest.once('finish', onfinish);
-
-  function unpipe() {
-    debug('unpipe');
-    src.unpipe(dest);
-  }
-
-  // tell the dest that it's being piped to
-  dest.emit('pipe', src);
-
-  // start the flow if it hasn't been started already.
-  if (!state.flowing) {
-    debug('pipe resume');
-    src.resume();
-  }
-
-  return dest;
-};
-
-function pipeOnDrain(src) {
-  return function () {
-    var state = src._readableState;
-    debug('pipeOnDrain', state.awaitDrain);
-    if (state.awaitDrain) state.awaitDrain--;
-    if (state.awaitDrain === 0 && EElistenerCount(src, 'data')) {
-      state.flowing = true;
-      flow(src);
-    }
-  };
-}
-
-Readable.prototype.unpipe = function (dest) {
-  var state = this._readableState;
-
-  // if we're not piping anywhere, then do nothing.
-  if (state.pipesCount === 0) return this;
-
-  // just one destination.  most common case.
-  if (state.pipesCount === 1) {
-    // passed in one, but it's not the right one.
-    if (dest && dest !== state.pipes) return this;
-
-    if (!dest) dest = state.pipes;
-
-    // got a match.
-    state.pipes = null;
-    state.pipesCount = 0;
-    state.flowing = false;
-    if (dest) dest.emit('unpipe', this);
-    return this;
-  }
-
-  // slow case. multiple pipe destinations.
-
-  if (!dest) {
-    // remove all.
-    var dests = state.pipes;
-    var len = state.pipesCount;
-    state.pipes = null;
-    state.pipesCount = 0;
-    state.flowing = false;
-
-    for (var _i = 0; _i < len; _i++) {
-      dests[_i].emit('unpipe', this);
-    }return this;
-  }
-
-  // try to find the right one.
-  var i = indexOf(state.pipes, dest);
-  if (i === -1) return this;
-
-  state.pipes.splice(i, 1);
-  state.pipesCount -= 1;
-  if (state.pipesCount === 1) state.pipes = state.pipes[0];
-
-  dest.emit('unpipe', this);
-
-  return this;
-};
-
-// set up data events if they are asked for
-// Ensure readable listeners eventually get something
-Readable.prototype.on = function (ev, fn) {
-  var res = Stream.prototype.on.call(this, ev, fn);
-
-  // If listening to data, and it has not explicitly been paused,
-  // then call resume to start the flow of data on the next tick.
-  if (ev === 'data' && false !== this._readableState.flowing) {
-    this.resume();
-  }
-
-  if (ev === 'readable' && !this._readableState.endEmitted) {
-    var state = this._readableState;
-    if (!state.readableListening) {
-      state.readableListening = true;
-      state.emittedReadable = false;
-      state.needReadable = true;
-      if (!state.reading) {
-        processNextTick(nReadingNextTick, this);
-      } else if (state.length) {
-        emitReadable(this, state);
-      }
-    }
-  }
-
-  return res;
-};
-Readable.prototype.addListener = Readable.prototype.on;
-
-function nReadingNextTick(self) {
-  debug('readable nexttick read 0');
-  self.read(0);
-}
-
-// pause() and resume() are remnants of the legacy readable stream API
-// If the user uses them, then switch into old mode.
-Readable.prototype.resume = function () {
-  var state = this._readableState;
-  if (!state.flowing) {
-    debug('resume');
-    state.flowing = true;
-    resume(this, state);
-  }
-  return this;
-};
-
-function resume(stream, state) {
-  if (!state.resumeScheduled) {
-    state.resumeScheduled = true;
-    processNextTick(resume_, stream, state);
-  }
-}
-
-function resume_(stream, state) {
-  if (!state.reading) {
-    debug('resume read 0');
-    stream.read(0);
-  }
-
-  state.resumeScheduled = false;
-  stream.emit('resume');
-  flow(stream);
-  if (state.flowing && !state.reading) stream.read(0);
-}
-
-Readable.prototype.pause = function () {
-  debug('call pause flowing=%j', this._readableState.flowing);
-  if (false !== this._readableState.flowing) {
-    debug('pause');
-    this._readableState.flowing = false;
-    this.emit('pause');
-  }
-  return this;
-};
-
-function flow(stream) {
-  var state = stream._readableState;
-  debug('flow', state.flowing);
-  if (state.flowing) {
-    do {
-      var chunk = stream.read();
-    } while (null !== chunk && state.flowing);
-  }
-}
-
-// wrap an old-style stream as the async data source.
-// This is *not* part of the readable stream interface.
-// It is an ugly unfortunate mess of history.
-Readable.prototype.wrap = function (stream) {
-  var state = this._readableState;
-  var paused = false;
-
-  var self = this;
-  stream.on('end', function () {
-    debug('wrapped end');
-    if (state.decoder && !state.ended) {
-      var chunk = state.decoder.end();
-      if (chunk && chunk.length) self.push(chunk);
-    }
-
-    self.push(null);
-  });
-
-  stream.on('data', function (chunk) {
-    debug('wrapped data');
-    if (state.decoder) chunk = state.decoder.write(chunk);
-
-    // don't skip over falsy values in objectMode
-    if (state.objectMode && (chunk === null || chunk === undefined)) return;else if (!state.objectMode && (!chunk || !chunk.length)) return;
-
-    var ret = self.push(chunk);
-    if (!ret) {
-      paused = true;
-      stream.pause();
-    }
-  });
-
-  // proxy all the other methods.
-  // important when wrapping filters and duplexes.
-  for (var i in stream) {
-    if (this[i] === undefined && typeof stream[i] === 'function') {
-      this[i] = function (method) {
-        return function () {
-          return stream[method].apply(stream, arguments);
-        };
-      }(i);
-    }
-  }
-
-  // proxy certain important events.
-  var events = ['error', 'close', 'destroy', 'pause', 'resume'];
-  forEach(events, function (ev) {
-    stream.on(ev, self.emit.bind(self, ev));
-  });
-
-  // when we try to consume some more bytes, simply unpause the
-  // underlying stream.
-  self._read = function (n) {
-    debug('wrapped _read', n);
-    if (paused) {
-      paused = false;
-      stream.resume();
-    }
-  };
-
-  return self;
-};
-
-// exposed for testing purposes only.
-Readable._fromList = fromList;
-
-// Pluck off n bytes from an array of buffers.
-// Length is the combined lengths of all the buffers in the list.
-function fromList(n, state) {
-  var list = state.buffer;
-  var length = state.length;
-  var stringMode = !!state.decoder;
-  var objectMode = !!state.objectMode;
-  var ret;
-
-  // nothing in the list, definitely empty.
-  if (list.length === 0) return null;
-
-  if (length === 0) ret = null;else if (objectMode) ret = list.shift();else if (!n || n >= length) {
-    // read it all, truncate the array.
-    if (stringMode) ret = list.join('');else if (list.length === 1) ret = list[0];else ret = Buffer.concat(list, length);
-    list.length = 0;
-  } else {
-    // read just some of it.
-    if (n < list[0].length) {
-      // just take a part of the first list item.
-      // slice is the same for buffers and strings.
-      var buf = list[0];
-      ret = buf.slice(0, n);
-      list[0] = buf.slice(n);
-    } else if (n === list[0].length) {
-      // first list is a perfect match
-      ret = list.shift();
-    } else {
-      // complex case.
-      // we have enough to cover it, but it spans past the first buffer.
-      if (stringMode) ret = '';else ret = new Buffer(n);
-
-      var c = 0;
-      for (var i = 0, l = list.length; i < l && c < n; i++) {
-        var buf = list[0];
-        var cpy = Math.min(n - c, buf.length);
-
-        if (stringMode) ret += buf.slice(0, cpy);else buf.copy(ret, c, 0, cpy);
-
-        if (cpy < buf.length) list[0] = buf.slice(cpy);else list.shift();
-
-        c += cpy;
-      }
-    }
-  }
-
-  return ret;
-}
-
-function endReadable(stream) {
-  var state = stream._readableState;
-
-  // If we get here before consuming all the bytes, then that is a
-  // bug in node.  Should never happen.
-  if (state.length > 0) throw new Error('endReadable called on non-empty stream');
-
-  if (!state.endEmitted) {
-    state.ended = true;
-    processNextTick(endReadableNT, state, stream);
-  }
-}
-
-function endReadableNT(state, stream) {
-  // Check that we didn't get one last unshift.
-  if (!state.endEmitted && state.length === 0) {
-    state.endEmitted = true;
-    stream.readable = false;
-    stream.emit('end');
-  }
-}
-
-function forEach(xs, f) {
-  for (var i = 0, l = xs.length; i < l; i++) {
-    f(xs[i], i);
-  }
-}
-
-function indexOf(xs, x) {
-  for (var i = 0, l = xs.length; i < l; i++) {
-    if (xs[i] === x) return i;
-  }
-  return -1;
-}
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14)))
-
-/***/ }),
-/* 28 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// Copyright Joyent, Inc. and other Node contributors.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to permit
-// persons to whom the Software is furnished to do so, subject to the
-// following conditions:
-//
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-// USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-
-/*<replacement>*/
-
-var Buffer = __webpack_require__(62).Buffer;
-/*</replacement>*/
-
-var isEncoding = Buffer.isEncoding || function (encoding) {
-  encoding = '' + encoding;
-  switch (encoding && encoding.toLowerCase()) {
-    case 'hex':case 'utf8':case 'utf-8':case 'ascii':case 'binary':case 'base64':case 'ucs2':case 'ucs-2':case 'utf16le':case 'utf-16le':case 'raw':
-      return true;
-    default:
-      return false;
-  }
-};
-
-function _normalizeEncoding(enc) {
-  if (!enc) return 'utf8';
-  var retried;
-  while (true) {
-    switch (enc) {
-      case 'utf8':
-      case 'utf-8':
-        return 'utf8';
-      case 'ucs2':
-      case 'ucs-2':
-      case 'utf16le':
-      case 'utf-16le':
-        return 'utf16le';
-      case 'latin1':
-      case 'binary':
-        return 'latin1';
-      case 'base64':
-      case 'ascii':
-      case 'hex':
-        return enc;
-      default:
-        if (retried) return; // undefined
-        enc = ('' + enc).toLowerCase();
-        retried = true;
-    }
-  }
-};
-
-// Do not cache `Buffer.isEncoding` when checking encoding names as some
-// modules monkey-patch it to support additional encodings
-function normalizeEncoding(enc) {
-  var nenc = _normalizeEncoding(enc);
-  if (typeof nenc !== 'string' && (Buffer.isEncoding === isEncoding || !isEncoding(enc))) throw new Error('Unknown encoding: ' + enc);
-  return nenc || enc;
-}
-
-// StringDecoder provides an interface for efficiently splitting a series of
-// buffers into a series of JS strings without breaking apart multi-byte
-// characters.
-exports.StringDecoder = StringDecoder;
-function StringDecoder(encoding) {
-  this.encoding = normalizeEncoding(encoding);
-  var nb;
-  switch (this.encoding) {
-    case 'utf16le':
-      this.text = utf16Text;
-      this.end = utf16End;
-      nb = 4;
-      break;
-    case 'utf8':
-      this.fillLast = utf8FillLast;
-      nb = 4;
-      break;
-    case 'base64':
-      this.text = base64Text;
-      this.end = base64End;
-      nb = 3;
-      break;
-    default:
-      this.write = simpleWrite;
-      this.end = simpleEnd;
-      return;
-  }
-  this.lastNeed = 0;
-  this.lastTotal = 0;
-  this.lastChar = Buffer.allocUnsafe(nb);
-}
-
-StringDecoder.prototype.write = function (buf) {
-  if (buf.length === 0) return '';
-  var r;
-  var i;
-  if (this.lastNeed) {
-    r = this.fillLast(buf);
-    if (r === undefined) return '';
-    i = this.lastNeed;
-    this.lastNeed = 0;
-  } else {
-    i = 0;
-  }
-  if (i < buf.length) return r ? r + this.text(buf, i) : this.text(buf, i);
-  return r || '';
-};
-
-StringDecoder.prototype.end = utf8End;
-
-// Returns only complete characters in a Buffer
-StringDecoder.prototype.text = utf8Text;
-
-// Attempts to complete a partial non-UTF-8 character using bytes from a Buffer
-StringDecoder.prototype.fillLast = function (buf) {
-  if (this.lastNeed <= buf.length) {
-    buf.copy(this.lastChar, this.lastTotal - this.lastNeed, 0, this.lastNeed);
-    return this.lastChar.toString(this.encoding, 0, this.lastTotal);
-  }
-  buf.copy(this.lastChar, this.lastTotal - this.lastNeed, 0, buf.length);
-  this.lastNeed -= buf.length;
-};
-
-// Checks the type of a UTF-8 byte, whether it's ASCII, a leading byte, or a
-// continuation byte. If an invalid byte is detected, -2 is returned.
-function utf8CheckByte(byte) {
-  if (byte <= 0x7F) return 0;else if (byte >> 5 === 0x06) return 2;else if (byte >> 4 === 0x0E) return 3;else if (byte >> 3 === 0x1E) return 4;
-  return byte >> 6 === 0x02 ? -1 : -2;
-}
-
-// Checks at most 3 bytes at the end of a Buffer in order to detect an
-// incomplete multi-byte UTF-8 character. The total number of bytes (2, 3, or 4)
-// needed to complete the UTF-8 character (if applicable) are returned.
-function utf8CheckIncomplete(self, buf, i) {
-  var j = buf.length - 1;
-  if (j < i) return 0;
-  var nb = utf8CheckByte(buf[j]);
-  if (nb >= 0) {
-    if (nb > 0) self.lastNeed = nb - 1;
-    return nb;
-  }
-  if (--j < i || nb === -2) return 0;
-  nb = utf8CheckByte(buf[j]);
-  if (nb >= 0) {
-    if (nb > 0) self.lastNeed = nb - 2;
-    return nb;
-  }
-  if (--j < i || nb === -2) return 0;
-  nb = utf8CheckByte(buf[j]);
-  if (nb >= 0) {
-    if (nb > 0) {
-      if (nb === 2) nb = 0;else self.lastNeed = nb - 3;
-    }
-    return nb;
-  }
-  return 0;
-}
-
-// Validates as many continuation bytes for a multi-byte UTF-8 character as
-// needed or are available. If we see a non-continuation byte where we expect
-// one, we "replace" the validated continuation bytes we've seen so far with
-// a single UTF-8 replacement character ('\ufffd'), to match v8's UTF-8 decoding
-// behavior. The continuation byte check is included three times in the case
-// where all of the continuation bytes for a character exist in the same buffer.
-// It is also done this way as a slight performance increase instead of using a
-// loop.
-function utf8CheckExtraBytes(self, buf, p) {
-  if ((buf[0] & 0xC0) !== 0x80) {
-    self.lastNeed = 0;
-    return '\ufffd';
-  }
-  if (self.lastNeed > 1 && buf.length > 1) {
-    if ((buf[1] & 0xC0) !== 0x80) {
-      self.lastNeed = 1;
-      return '\ufffd';
-    }
-    if (self.lastNeed > 2 && buf.length > 2) {
-      if ((buf[2] & 0xC0) !== 0x80) {
-        self.lastNeed = 2;
-        return '\ufffd';
-      }
-    }
-  }
-}
-
-// Attempts to complete a multi-byte UTF-8 character using bytes from a Buffer.
-function utf8FillLast(buf) {
-  var p = this.lastTotal - this.lastNeed;
-  var r = utf8CheckExtraBytes(this, buf, p);
-  if (r !== undefined) return r;
-  if (this.lastNeed <= buf.length) {
-    buf.copy(this.lastChar, p, 0, this.lastNeed);
-    return this.lastChar.toString(this.encoding, 0, this.lastTotal);
-  }
-  buf.copy(this.lastChar, p, 0, buf.length);
-  this.lastNeed -= buf.length;
-}
-
-// Returns all complete UTF-8 characters in a Buffer. If the Buffer ended on a
-// partial character, the character's bytes are buffered until the required
-// number of bytes are available.
-function utf8Text(buf, i) {
-  var total = utf8CheckIncomplete(this, buf, i);
-  if (!this.lastNeed) return buf.toString('utf8', i);
-  this.lastTotal = total;
-  var end = buf.length - (total - this.lastNeed);
-  buf.copy(this.lastChar, 0, end);
-  return buf.toString('utf8', i, end);
-}
-
-// For UTF-8, a replacement character is added when ending on a partial
-// character.
-function utf8End(buf) {
-  var r = buf && buf.length ? this.write(buf) : '';
-  if (this.lastNeed) return r + '\ufffd';
-  return r;
-}
-
-// UTF-16LE typically needs two bytes per character, but even if we have an even
-// number of bytes available, we need to check if we end on a leading/high
-// surrogate. In that case, we need to wait for the next two bytes in order to
-// decode the last character properly.
-function utf16Text(buf, i) {
-  if ((buf.length - i) % 2 === 0) {
-    var r = buf.toString('utf16le', i);
-    if (r) {
-      var c = r.charCodeAt(r.length - 1);
-      if (c >= 0xD800 && c <= 0xDBFF) {
-        this.lastNeed = 2;
-        this.lastTotal = 4;
-        this.lastChar[0] = buf[buf.length - 2];
-        this.lastChar[1] = buf[buf.length - 1];
-        return r.slice(0, -1);
-      }
-    }
-    return r;
-  }
-  this.lastNeed = 1;
-  this.lastTotal = 2;
-  this.lastChar[0] = buf[buf.length - 1];
-  return buf.toString('utf16le', i, buf.length - 1);
-}
-
-// For UTF-16LE we do not explicitly append special replacement characters if we
-// end on a partial character, we simply let v8 handle that.
-function utf16End(buf) {
-  var r = buf && buf.length ? this.write(buf) : '';
-  if (this.lastNeed) {
-    var end = this.lastTotal - this.lastNeed;
-    return r + this.lastChar.toString('utf16le', 0, end);
-  }
-  return r;
-}
-
-function base64Text(buf, i) {
-  var n = (buf.length - i) % 3;
-  if (n === 0) return buf.toString('base64', i);
-  this.lastNeed = 3 - n;
-  this.lastTotal = 3;
-  if (n === 1) {
-    this.lastChar[0] = buf[buf.length - 1];
-  } else {
-    this.lastChar[0] = buf[buf.length - 2];
-    this.lastChar[1] = buf[buf.length - 1];
-  }
-  return buf.toString('base64', i, buf.length - n);
-}
-
-function base64End(buf) {
-  var r = buf && buf.length ? this.write(buf) : '';
-  if (this.lastNeed) return r + this.lastChar.toString('base64', 0, 3 - this.lastNeed);
-  return r;
-}
-
-// Pass bytes on through for single-byte encodings (e.g. ascii, latin1, hex)
-function simpleWrite(buf) {
-  return buf.toString(this.encoding);
-}
-
-function simpleEnd(buf) {
-  return buf && buf.length ? this.write(buf) : '';
-}
-
-/***/ }),
-/* 29 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-// a passthrough stream.
-// basically just the most minimal sort of Transform stream.
-// Every written chunk gets output as-is.
-
-
-
-module.exports = PassThrough;
-
-var Transform = __webpack_require__(19);
-
-/*<replacement>*/
-var util = __webpack_require__(10);
-util.inherits = __webpack_require__(8);
-/*</replacement>*/
-
-util.inherits(PassThrough, Transform);
-
-function PassThrough(options) {
-  if (!(this instanceof PassThrough)) return new PassThrough(options);
-
-  Transform.call(this, options);
-}
-
-PassThrough.prototype._transform = function (chunk, encoding, cb) {
-  cb(null, chunk);
-};
-
-/***/ }),
-/* 30 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-var utils = __webpack_require__(0);
-var support = __webpack_require__(4);
-// private property
-var _keyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-
-
-// public method for encoding
-exports.encode = function(input) {
-    var output = [];
-    var chr1, chr2, chr3, enc1, enc2, enc3, enc4;
-    var i = 0, len = input.length, remainingBytes = len;
-
-    var isArray = utils.getTypeOf(input) !== "string";
-    while (i < input.length) {
-        remainingBytes = len - i;
-
-        if (!isArray) {
-            chr1 = input.charCodeAt(i++);
-            chr2 = i < len ? input.charCodeAt(i++) : 0;
-            chr3 = i < len ? input.charCodeAt(i++) : 0;
-        } else {
-            chr1 = input[i++];
-            chr2 = i < len ? input[i++] : 0;
-            chr3 = i < len ? input[i++] : 0;
-        }
-
-        enc1 = chr1 >> 2;
-        enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
-        enc3 = remainingBytes > 1 ? (((chr2 & 15) << 2) | (chr3 >> 6)) : 64;
-        enc4 = remainingBytes > 2 ? (chr3 & 63) : 64;
-
-        output.push(_keyStr.charAt(enc1) + _keyStr.charAt(enc2) + _keyStr.charAt(enc3) + _keyStr.charAt(enc4));
-
-    }
-
-    return output.join("");
-};
-
-// public method for decoding
-exports.decode = function(input) {
-    var chr1, chr2, chr3;
-    var enc1, enc2, enc3, enc4;
-    var i = 0, resultIndex = 0;
-
-    var dataUrlPrefix = "data:";
-
-    if (input.substr(0, dataUrlPrefix.length) === dataUrlPrefix) {
-        // This is a common error: people give a data url
-        // (data:image/png;base64,iVBOR...) with a {base64: true} and
-        // wonders why things don't work.
-        // We can detect that the string input looks like a data url but we
-        // *can't* be sure it is one: removing everything up to the comma would
-        // be too dangerous.
-        throw new Error("Invalid base64 input, it looks like a data url.");
-    }
-
-    input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
-
-    var totalLength = input.length * 3 / 4;
-    if(input.charAt(input.length - 1) === _keyStr.charAt(64)) {
-        totalLength--;
-    }
-    if(input.charAt(input.length - 2) === _keyStr.charAt(64)) {
-        totalLength--;
-    }
-    if (totalLength % 1 !== 0) {
-        // totalLength is not an integer, the length does not match a valid
-        // base64 content. That can happen if:
-        // - the input is not a base64 content
-        // - the input is *almost* a base64 content, with a extra chars at the
-        //   beginning or at the end
-        // - the input uses a base64 variant (base64url for example)
-        throw new Error("Invalid base64 input, bad content length.");
-    }
-    var output;
-    if (support.uint8array) {
-        output = new Uint8Array(totalLength|0);
-    } else {
-        output = new Array(totalLength|0);
-    }
-
-    while (i < input.length) {
-
-        enc1 = _keyStr.indexOf(input.charAt(i++));
-        enc2 = _keyStr.indexOf(input.charAt(i++));
-        enc3 = _keyStr.indexOf(input.charAt(i++));
-        enc4 = _keyStr.indexOf(input.charAt(i++));
-
-        chr1 = (enc1 << 2) | (enc2 >> 4);
-        chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
-        chr3 = ((enc3 & 3) << 6) | enc4;
-
-        output[resultIndex++] = chr1;
-
-        if (enc3 !== 64) {
-            output[resultIndex++] = chr2;
-        }
-        if (enc4 !== 64) {
-            output[resultIndex++] = chr3;
-        }
-
-    }
-
-    return output;
-};
-
-
-/***/ }),
-/* 31 */
-/***/ (function(module, exports) {
-
-var core = module.exports = {version: '2.3.0'};
-if(typeof __e == 'number')__e = core; // eslint-disable-line no-undef
-
-/***/ }),
-/* 32 */
-/***/ (function(module, exports, __webpack_require__) {
-
-// optional / simple context binding
-var aFunction = __webpack_require__(70);
-module.exports = function(fn, that, length){
-  aFunction(fn);
-  if(that === undefined)return fn;
-  switch(length){
-    case 1: return function(a){
-      return fn.call(that, a);
-    };
-    case 2: return function(a, b){
-      return fn.call(that, a, b);
-    };
-    case 3: return function(a, b, c){
-      return fn.call(that, a, b, c);
-    };
-  }
-  return function(/* ...args */){
-    return fn.apply(that, arguments);
-  };
-};
-
-/***/ }),
-/* 33 */
-/***/ (function(module, exports) {
-
-module.exports = function(exec){
-  try {
-    return !!exec();
-  } catch(e){
-    return true;
-  }
-};
-
-/***/ }),
-/* 34 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var isObject = __webpack_require__(20)
-  , document = __webpack_require__(16).document
-  // in old IE typeof document.createElement is 'object'
-  , is = isObject(document) && isObject(document.createElement);
-module.exports = function(it){
-  return is ? document.createElement(it) : {};
-};
-
-/***/ }),
-/* 35 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(Buffer) {
-
-var utils = __webpack_require__(0);
-var ConvertWorker = __webpack_require__(83);
-var GenericWorker = __webpack_require__(1);
-var base64 = __webpack_require__(30);
-var support = __webpack_require__(4);
-var external = __webpack_require__(11);
-
-var NodejsStreamOutputAdapter = null;
-if (support.nodestream) {
-    try {
-        NodejsStreamOutputAdapter = __webpack_require__(84);
-    } catch(e) {}
-}
-
-/**
- * Apply the final transformation of the data. If the user wants a Blob for
- * example, it's easier to work with an U8intArray and finally do the
- * ArrayBuffer/Blob conversion.
- * @param {String} type the name of the final type
- * @param {String|Uint8Array|Buffer} content the content to transform
- * @param {String} mimeType the mime type of the content, if applicable.
- * @return {String|Uint8Array|ArrayBuffer|Buffer|Blob} the content in the right format.
- */
-function transformZipOutput(type, content, mimeType) {
-    switch(type) {
-        case "blob" :
-            return utils.newBlob(utils.transformTo("arraybuffer", content), mimeType);
-        case "base64" :
-            return base64.encode(content);
-        default :
-            return utils.transformTo(type, content);
-    }
-}
-
-/**
- * Concatenate an array of data of the given type.
- * @param {String} type the type of the data in the given array.
- * @param {Array} dataArray the array containing the data chunks to concatenate
- * @return {String|Uint8Array|Buffer} the concatenated data
- * @throws Error if the asked type is unsupported
- */
-function concat (type, dataArray) {
-    var i, index = 0, res = null, totalLength = 0;
-    for(i = 0; i < dataArray.length; i++) {
-        totalLength += dataArray[i].length;
-    }
-    switch(type) {
-        case "string":
-            return dataArray.join("");
-          case "array":
-            return Array.prototype.concat.apply([], dataArray);
-        case "uint8array":
-            res = new Uint8Array(totalLength);
-            for(i = 0; i < dataArray.length; i++) {
-                res.set(dataArray[i], index);
-                index += dataArray[i].length;
-            }
-            return res;
-        case "nodebuffer":
-            return Buffer.concat(dataArray);
-        default:
-            throw new Error("concat : unsupported type '"  + type + "'");
-    }
-}
-
-/**
- * Listen a StreamHelper, accumulate its content and concatenate it into a
- * complete block.
- * @param {StreamHelper} helper the helper to use.
- * @param {Function} updateCallback a callback called on each update. Called
- * with one arg :
- * - the metadata linked to the update received.
- * @return Promise the promise for the accumulation.
- */
-function accumulate(helper, updateCallback) {
-    return new external.Promise(function (resolve, reject){
-        var dataArray = [];
-        var chunkType = helper._internalType,
-            resultType = helper._outputType,
-            mimeType = helper._mimeType;
-        helper
-        .on('data', function (data, meta) {
-            dataArray.push(data);
-            if(updateCallback) {
-                updateCallback(meta);
-            }
-        })
-        .on('error', function(err) {
-            dataArray = [];
-            reject(err);
-        })
-        .on('end', function (){
-            try {
-                var result = transformZipOutput(resultType, concat(chunkType, dataArray), mimeType);
-                resolve(result);
-            } catch (e) {
-                reject(e);
-            }
-            dataArray = [];
-        })
-        .resume();
-    });
-}
-
-/**
- * An helper to easily use workers outside of JSZip.
- * @constructor
- * @param {Worker} worker the worker to wrap
- * @param {String} outputType the type of data expected by the use
- * @param {String} mimeType the mime type of the content, if applicable.
- */
-function StreamHelper(worker, outputType, mimeType) {
-    var internalType = outputType;
-    switch(outputType) {
-        case "blob":
-        case "arraybuffer":
-            internalType = "uint8array";
-        break;
-        case "base64":
-            internalType = "string";
-        break;
-    }
-
-    try {
-        // the type used internally
-        this._internalType = internalType;
-        // the type used to output results
-        this._outputType = outputType;
-        // the mime type
-        this._mimeType = mimeType;
-        utils.checkSupport(internalType);
-        this._worker = worker.pipe(new ConvertWorker(internalType));
-        // the last workers can be rewired without issues but we need to
-        // prevent any updates on previous workers.
-        worker.lock();
-    } catch(e) {
-        this._worker = new GenericWorker("error");
-        this._worker.error(e);
-    }
-}
-
-StreamHelper.prototype = {
-    /**
-     * Listen a StreamHelper, accumulate its content and concatenate it into a
-     * complete block.
-     * @param {Function} updateCb the update callback.
-     * @return Promise the promise for the accumulation.
-     */
-    accumulate : function (updateCb) {
-        return accumulate(this, updateCb);
-    },
-    /**
-     * Add a listener on an event triggered on a stream.
-     * @param {String} evt the name of the event
-     * @param {Function} fn the listener
-     * @return {StreamHelper} the current helper.
-     */
-    on : function (evt, fn) {
-        var self = this;
-
-        if(evt === "data") {
-            this._worker.on(evt, function (chunk) {
-                fn.call(self, chunk.data, chunk.meta);
-            });
-        } else {
-            this._worker.on(evt, function () {
-                utils.delay(fn, arguments, self);
-            });
-        }
-        return this;
-    },
-    /**
-     * Resume the flow of chunks.
-     * @return {StreamHelper} the current helper.
-     */
-    resume : function () {
-        utils.delay(this._worker.resume, [], this._worker);
-        return this;
-    },
-    /**
-     * Pause the flow of chunks.
-     * @return {StreamHelper} the current helper.
-     */
-    pause : function () {
-        this._worker.pause();
-        return this;
-    },
-    /**
-     * Return a nodejs stream for this helper.
-     * @param {Function} updateCb the update callback.
-     * @return {NodejsStreamOutputAdapter} the nodejs stream.
-     */
-    toNodejsStream : function (updateCb) {
-        utils.checkSupport("nodestream");
-        if (this._outputType !== "nodebuffer") {
-            // an object stream containing blob/arraybuffer/uint8array/string
-            // is strange and I don't know if it would be useful.
-            // I you find this comment and have a good usecase, please open a
-            // bug report !
-            throw new Error(this._outputType + " is not supported by this method");
-        }
-
-        return new NodejsStreamOutputAdapter(this, {
-            objectMode : this._outputType !== "nodebuffer"
-        }, updateCb);
-    }
-};
-
-
-module.exports = StreamHelper;
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(3).Buffer))
-
-/***/ }),
-/* 36 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-exports.base64 = false;
-exports.binary = false;
-exports.dir = false;
-exports.createFolders = true;
-exports.date = null;
-exports.compression = null;
-exports.compressionOptions = null;
-exports.comment = null;
-exports.unixPermissions = null;
-exports.dosPermissions = null;
-
-
-/***/ }),
-/* 37 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var utils = __webpack_require__(0);
-var GenericWorker = __webpack_require__(1);
-
-// the size of the generated chunks
-// TODO expose this as a public variable
-var DEFAULT_BLOCK_SIZE = 16 * 1024;
-
-/**
- * A worker that reads a content and emits chunks.
- * @constructor
- * @param {Promise} dataP the promise of the data to split
- */
-function DataWorker(dataP) {
-    GenericWorker.call(this, "DataWorker");
-    var self = this;
-    this.dataIsReady = false;
-    this.index = 0;
-    this.max = 0;
-    this.data = null;
-    this.type = "";
-
-    this._tickScheduled = false;
-
-    dataP.then(function (data) {
-        self.dataIsReady = true;
-        self.data = data;
-        self.max = data && data.length || 0;
-        self.type = utils.getTypeOf(data);
-        if(!self.isPaused) {
-            self._tickAndRepeat();
-        }
-    }, function (e) {
-        self.error(e);
-    });
-}
-
-utils.inherits(DataWorker, GenericWorker);
-
-/**
- * @see GenericWorker.cleanUp
- */
-DataWorker.prototype.cleanUp = function () {
-    GenericWorker.prototype.cleanUp.call(this);
-    this.data = null;
-};
-
-/**
- * @see GenericWorker.resume
- */
-DataWorker.prototype.resume = function () {
-    if(!GenericWorker.prototype.resume.call(this)) {
-        return false;
-    }
-
-    if (!this._tickScheduled && this.dataIsReady) {
-        this._tickScheduled = true;
-        utils.delay(this._tickAndRepeat, [], this);
-    }
-    return true;
-};
-
-/**
- * Trigger a tick a schedule an other call to this function.
- */
-DataWorker.prototype._tickAndRepeat = function() {
-    this._tickScheduled = false;
-    if(this.isPaused || this.isFinished) {
-        return;
-    }
-    this._tick();
-    if(!this.isFinished) {
-        utils.delay(this._tickAndRepeat, [], this);
-        this._tickScheduled = true;
-    }
-};
-
-/**
- * Read and push a chunk.
- */
-DataWorker.prototype._tick = function() {
-
-    if(this.isPaused || this.isFinished) {
-        return false;
-    }
-
-    var size = DEFAULT_BLOCK_SIZE;
-    var data = null, nextIndex = Math.min(this.max, this.index + size);
-    if (this.index >= this.max) {
-        // EOF
-        return this.end();
-    } else {
-        switch(this.type) {
-            case "string":
-                data = this.data.substring(this.index, nextIndex);
-            break;
-            case "uint8array":
-                data = this.data.subarray(this.index, nextIndex);
-            break;
-            case "array":
-            case "nodebuffer":
-                data = this.data.slice(this.index, nextIndex);
-            break;
-        }
-        this.index = nextIndex;
-        return this.push({
-            data : data,
-            meta : {
-                percent : this.max ? this.index / this.max * 100 : 0
-            }
-        });
-    }
-};
-
-module.exports = DataWorker;
-
-
-/***/ }),
-/* 38 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var utils = __webpack_require__(0);
-var GenericWorker = __webpack_require__(1);
-
-/**
- * A worker which calculate the total length of the data flowing through.
- * @constructor
- * @param {String} propName the name used to expose the length
- */
-function DataLengthProbe(propName) {
-    GenericWorker.call(this, "DataLengthProbe for " + propName);
-    this.propName = propName;
-    this.withStreamInfo(propName, 0);
-}
-utils.inherits(DataLengthProbe, GenericWorker);
-
-/**
- * @see GenericWorker.processChunk
- */
-DataLengthProbe.prototype.processChunk = function (chunk) {
-    if(chunk) {
-        var length = this.streamInfo[this.propName] || 0;
-        this.streamInfo[this.propName] = length + chunk.data.length;
-    }
-    GenericWorker.prototype.processChunk.call(this, chunk);
-};
-module.exports = DataLengthProbe;
-
-
-
-/***/ }),
-/* 39 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var GenericWorker = __webpack_require__(1);
-var crc32 = __webpack_require__(23);
-var utils = __webpack_require__(0);
-
-/**
- * A worker which calculate the crc32 of the data flowing through.
- * @constructor
- */
-function Crc32Probe() {
-    GenericWorker.call(this, "Crc32Probe");
-    this.withStreamInfo("crc32", 0);
-}
-utils.inherits(Crc32Probe, GenericWorker);
-
-/**
- * @see GenericWorker.processChunk
- */
-Crc32Probe.prototype.processChunk = function (chunk) {
-    this.streamInfo.crc32 = crc32(chunk.data, this.streamInfo.crc32 || 0);
-    this.push(chunk);
-};
-module.exports = Crc32Probe;
-
-
-/***/ }),
-/* 40 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var GenericWorker = __webpack_require__(1);
-
-exports.STORE = {
-    magic: "\x00\x00",
-    compressWorker : function (compressionOptions) {
-        return new GenericWorker("STORE compression");
-    },
-    uncompressWorker : function () {
-        return new GenericWorker("STORE decompression");
-    }
-};
-exports.DEFLATE = __webpack_require__(87);
-
-
-/***/ }),
-/* 41 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7203,7 +3719,7 @@ module.exports = adler32;
 
 
 /***/ }),
-/* 42 */
+/* 11 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7269,7 +3785,7 @@ module.exports = crc32;
 
 
 /***/ }),
-/* 43 */
+/* 12 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7277,7 +3793,7 @@ module.exports = crc32;
 
 
 
-var utils = __webpack_require__(5);
+var utils = __webpack_require__(2);
 
 
 // Quick check if we can use fast array to bin string conversion
@@ -7461,7 +3977,7 @@ exports.utf8border = function (buf, max) {
 
 
 /***/ }),
-/* 44 */
+/* 13 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7515,7 +4031,7 @@ module.exports = ZStream;
 
 
 /***/ }),
-/* 45 */
+/* 14 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7590,7 +4106,7 @@ module.exports = {
 
 
 /***/ }),
-/* 46 */
+/* 15 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7604,106 +4120,318 @@ exports.DATA_DESCRIPTOR = "PK\x07\x08";
 
 
 /***/ }),
-/* 47 */
+/* 16 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
-
-var utils = __webpack_require__(0);
-var support = __webpack_require__(4);
-var ArrayReader = __webpack_require__(48);
-var StringReader = __webpack_require__(101);
-var NodeBufferReader = __webpack_require__(102);
-var Uint8ArrayReader = __webpack_require__(50);
-
-/**
- * Create a reader adapted to the data.
- * @param {String|ArrayBuffer|Uint8Array|Buffer} data the data to read.
- * @return {DataReader} the data reader.
- */
-module.exports = function (data) {
-    var type = utils.getTypeOf(data);
-    utils.checkSupport(type);
-    if (type === "string" && !support.uint8array) {
-        return new StringReader(data);
-    }
-    if (type === "nodebuffer") {
-        return new NodeBufferReader(data);
-    }
-    if (support.uint8array) {
-        return new Uint8ArrayReader(utils.transformTo("uint8array", data));
-    }
-    return new ArrayReader(utils.transformTo("array", data));
-};
+exports.base64 = false;
+exports.binary = false;
+exports.dir = false;
+exports.createFolders = false;
+exports.date = null;
+exports.compression = null;
+exports.compressionOptions = null;
+exports.comment = null;
+exports.unixPermissions = null;
+exports.dosPermissions = null;
 
 
 /***/ }),
-/* 48 */
+/* 17 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
-var DataReader = __webpack_require__(49);
+function CompressedObject() {
+    this.compressedSize = 0;
+    this.uncompressedSize = 0;
+    this.crc32 = 0;
+    this.compressionMethod = null;
+    this.compressedContent = null;
+}
+
+CompressedObject.prototype = {
+    /**
+     * Return the decompressed content in an unspecified format.
+     * The format will depend on the decompressor.
+     * @return {Object} the decompressed content.
+     */
+    getContent: function() {
+        return null; // see implementation
+    },
+    /**
+     * Return the compressed content in an unspecified format.
+     * The format will depend on the compressed conten source.
+     * @return {Object} the compressed content.
+     */
+    getCompressedContent: function() {
+        return null; // see implementation
+    }
+};
+module.exports = CompressedObject;
+
+
+/***/ }),
+/* 18 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+var utils = __webpack_require__(0);
+var support = __webpack_require__(3);
+var nodeBuffer = __webpack_require__(8);
+
+/**
+ * The following functions come from pako, from pako/lib/utils/strings
+ * released under the MIT license, see pako https://github.com/nodeca/pako/
+ */
+
+// Table with utf8 lengths (calculated by first byte of sequence)
+// Note, that 5 & 6-byte values and some 4-byte values can not be represented in JS,
+// because max possible codepoint is 0x10ffff
+var _utf8len = new Array(256);
+for (var i=0; i<256; i++) {
+  _utf8len[i] = (i >= 252 ? 6 : i >= 248 ? 5 : i >= 240 ? 4 : i >= 224 ? 3 : i >= 192 ? 2 : 1);
+}
+_utf8len[254]=_utf8len[254]=1; // Invalid sequence start
+
+// convert string to array (typed, when possible)
+var string2buf = function (str) {
+    var buf, c, c2, m_pos, i, str_len = str.length, buf_len = 0;
+
+    // count binary size
+    for (m_pos = 0; m_pos < str_len; m_pos++) {
+        c = str.charCodeAt(m_pos);
+        if ((c & 0xfc00) === 0xd800 && (m_pos+1 < str_len)) {
+            c2 = str.charCodeAt(m_pos+1);
+            if ((c2 & 0xfc00) === 0xdc00) {
+                c = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
+                m_pos++;
+            }
+        }
+        buf_len += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+    }
+
+    // allocate buffer
+    if (support.uint8array) {
+        buf = new Uint8Array(buf_len);
+    } else {
+        buf = new Array(buf_len);
+    }
+
+    // convert
+    for (i=0, m_pos = 0; i < buf_len; m_pos++) {
+        c = str.charCodeAt(m_pos);
+        if ((c & 0xfc00) === 0xd800 && (m_pos+1 < str_len)) {
+            c2 = str.charCodeAt(m_pos+1);
+            if ((c2 & 0xfc00) === 0xdc00) {
+                c = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
+                m_pos++;
+            }
+        }
+        if (c < 0x80) {
+            /* one byte */
+            buf[i++] = c;
+        } else if (c < 0x800) {
+            /* two bytes */
+            buf[i++] = 0xC0 | (c >>> 6);
+            buf[i++] = 0x80 | (c & 0x3f);
+        } else if (c < 0x10000) {
+            /* three bytes */
+            buf[i++] = 0xE0 | (c >>> 12);
+            buf[i++] = 0x80 | (c >>> 6 & 0x3f);
+            buf[i++] = 0x80 | (c & 0x3f);
+        } else {
+            /* four bytes */
+            buf[i++] = 0xf0 | (c >>> 18);
+            buf[i++] = 0x80 | (c >>> 12 & 0x3f);
+            buf[i++] = 0x80 | (c >>> 6 & 0x3f);
+            buf[i++] = 0x80 | (c & 0x3f);
+        }
+    }
+
+    return buf;
+};
+
+// Calculate max possible position in utf8 buffer,
+// that will not break sequence. If that's not possible
+// - (very small limits) return max size as is.
+//
+// buf[] - utf8 bytes array
+// max   - length limit (mandatory);
+var utf8border = function(buf, max) {
+    var pos;
+
+    max = max || buf.length;
+    if (max > buf.length) { max = buf.length; }
+
+    // go back from last position, until start of sequence found
+    pos = max-1;
+    while (pos >= 0 && (buf[pos] & 0xC0) === 0x80) { pos--; }
+
+    // Fuckup - very small and broken sequence,
+    // return max, because we should return something anyway.
+    if (pos < 0) { return max; }
+
+    // If we came to start of buffer - that means vuffer is too small,
+    // return max too.
+    if (pos === 0) { return max; }
+
+    return (pos + _utf8len[buf[pos]] > max) ? pos : max;
+};
+
+// convert array to string
+var buf2string = function (buf) {
+    var str, i, out, c, c_len;
+    var len = buf.length;
+
+    // Reserve max possible length (2 words per char)
+    // NB: by unknown reasons, Array is significantly faster for
+    //     String.fromCharCode.apply than Uint16Array.
+    var utf16buf = new Array(len*2);
+
+    for (out=0, i=0; i<len;) {
+        c = buf[i++];
+        // quick process ascii
+        if (c < 0x80) { utf16buf[out++] = c; continue; }
+
+        c_len = _utf8len[c];
+        // skip 5 & 6 byte codes
+        if (c_len > 4) { utf16buf[out++] = 0xfffd; i += c_len-1; continue; }
+
+        // apply mask on first byte
+        c &= c_len === 2 ? 0x1f : c_len === 3 ? 0x0f : 0x07;
+        // join the rest
+        while (c_len > 1 && i < len) {
+            c = (c << 6) | (buf[i++] & 0x3f);
+            c_len--;
+        }
+
+        // terminated by end of string?
+        if (c_len > 1) { utf16buf[out++] = 0xfffd; continue; }
+
+        if (c < 0x10000) {
+            utf16buf[out++] = c;
+        } else {
+            c -= 0x10000;
+            utf16buf[out++] = 0xd800 | ((c >> 10) & 0x3ff);
+            utf16buf[out++] = 0xdc00 | (c & 0x3ff);
+        }
+    }
+
+    // shrinkBuf(utf16buf, out)
+    if (utf16buf.length !== out) {
+        if(utf16buf.subarray) {
+            utf16buf = utf16buf.subarray(0, out);
+        } else {
+            utf16buf.length = out;
+        }
+    }
+
+    // return String.fromCharCode.apply(null, utf16buf);
+    return utils.applyFromCharCode(utf16buf);
+};
+
+
+// That's all for the pako functions.
+
+
+/**
+ * Transform a javascript string into an array (typed if possible) of bytes,
+ * UTF-8 encoded.
+ * @param {String} str the string to encode
+ * @return {Array|Uint8Array|Buffer} the UTF-8 encoded string.
+ */
+exports.utf8encode = function utf8encode(str) {
+    if (support.nodebuffer) {
+        return nodeBuffer(str, "utf-8");
+    }
+
+    return string2buf(str);
+};
+
+
+/**
+ * Transform a bytes array (or a representation) representing an UTF-8 encoded
+ * string into a javascript string.
+ * @param {Array|Uint8Array|Buffer} buf the data de decode
+ * @return {String} the decoded string.
+ */
+exports.utf8decode = function utf8decode(buf) {
+    if (support.nodebuffer) {
+        return utils.transformTo("nodebuffer", buf).toString("utf-8");
+    }
+
+    buf = utils.transformTo(support.uint8array ? "uint8array" : "array", buf);
+
+    // return buf2string(buf);
+    // Chrome prefers to work with "small" chunks of data
+    // for the method buf2string.
+    // Firefox and Chrome has their own shortcut, IE doesn't seem to really care.
+    var result = [], k = 0, len = buf.length, chunk = 65536;
+    while (k < len) {
+        var nextBoundary = utf8border(buf, Math.min(k + chunk, len));
+        if (support.uint8array) {
+            result.push(buf2string(buf.subarray(k, nextBoundary)));
+        } else {
+            result.push(buf2string(buf.slice(k, nextBoundary)));
+        }
+        k = nextBoundary;
+    }
+    return result.join("");
+
+};
+// vim: set shiftwidth=4 softtabstop=4:
+
+
+/***/ }),
+/* 19 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var DataReader = __webpack_require__(20);
 var utils = __webpack_require__(0);
 
-function ArrayReader(data) {
-    DataReader.call(this, data);
-	for(var i = 0; i < this.data.length; i++) {
-		data[i] = data[i] & 0xFF;
-	}
+function StringReader(data, optimizedBinaryString) {
+    this.data = data;
+    if (!optimizedBinaryString) {
+        this.data = utils.string2binary(this.data);
+    }
+    this.length = this.data.length;
+    this.index = 0;
+    this.zero = 0;
 }
-utils.inherits(ArrayReader, DataReader);
+StringReader.prototype = new DataReader();
 /**
  * @see DataReader.byteAt
  */
-ArrayReader.prototype.byteAt = function(i) {
-    return this.data[this.zero + i];
+StringReader.prototype.byteAt = function(i) {
+    return this.data.charCodeAt(this.zero + i);
 };
 /**
  * @see DataReader.lastIndexOfSignature
  */
-ArrayReader.prototype.lastIndexOfSignature = function(sig) {
-    var sig0 = sig.charCodeAt(0),
-        sig1 = sig.charCodeAt(1),
-        sig2 = sig.charCodeAt(2),
-        sig3 = sig.charCodeAt(3);
-    for (var i = this.length - 4; i >= 0; --i) {
-        if (this.data[i] === sig0 && this.data[i + 1] === sig1 && this.data[i + 2] === sig2 && this.data[i + 3] === sig3) {
-            return i - this.zero;
-        }
-    }
-
-    return -1;
-};
-/**
- * @see DataReader.readAndCheckSignature
- */
-ArrayReader.prototype.readAndCheckSignature = function (sig) {
-    var sig0 = sig.charCodeAt(0),
-        sig1 = sig.charCodeAt(1),
-        sig2 = sig.charCodeAt(2),
-        sig3 = sig.charCodeAt(3),
-        data = this.readData(4);
-    return sig0 === data[0] && sig1 === data[1] && sig2 === data[2] && sig3 === data[3];
+StringReader.prototype.lastIndexOfSignature = function(sig) {
+    return this.data.lastIndexOf(sig) - this.zero;
 };
 /**
  * @see DataReader.readData
  */
-ArrayReader.prototype.readData = function(size) {
+StringReader.prototype.readData = function(size) {
     this.checkOffset(size);
-    if(size === 0) {
-        return [];
-    }
+    // this will work because the constructor applied the "& 0xff" mask.
     var result = this.data.slice(this.zero + this.index, this.zero + this.index + size);
     this.index += size;
     return result;
 };
-module.exports = ArrayReader;
+module.exports = StringReader;
 
 
 /***/ }),
-/* 49 */
+/* 20 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -7711,8 +4439,8 @@ module.exports = ArrayReader;
 var utils = __webpack_require__(0);
 
 function DataReader(data) {
-    this.data = data; // type : see implementation
-    this.length = data.length;
+    this.data = null; // type : see implementation
+    this.length = 0;
     this.index = 0;
     this.zero = 0;
 }
@@ -7726,7 +4454,7 @@ DataReader.prototype = {
         this.checkIndex(this.index + offset);
     },
     /**
-     * Check that the specified index will not be too far.
+     * Check that the specifed index will not be too far.
      * @param {string} newIndex the index to check.
      * @throws {Error} an Error if the index is out of bounds.
      */
@@ -7800,44 +4528,40 @@ DataReader.prototype = {
         // see implementations
     },
     /**
-     * Read the signature (4 bytes) at the current position and compare it with sig.
-     * @param {string} sig the expected signature
-     * @return {boolean} true if the signature matches, false otherwise.
-     */
-    readAndCheckSignature: function(sig) {
-        // see implementations
-    },
-    /**
      * Get the next date.
      * @return {Date} the date.
      */
     readDate: function() {
         var dostime = this.readInt(4);
-        return new Date(Date.UTC(
+        return new Date(
         ((dostime >> 25) & 0x7f) + 1980, // year
         ((dostime >> 21) & 0x0f) - 1, // month
         (dostime >> 16) & 0x1f, // day
         (dostime >> 11) & 0x1f, // hour
         (dostime >> 5) & 0x3f, // minute
-        (dostime & 0x1f) << 1)); // second
+        (dostime & 0x1f) << 1); // second
     }
 };
 module.exports = DataReader;
 
 
 /***/ }),
-/* 50 */
+/* 21 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
-var ArrayReader = __webpack_require__(48);
-var utils = __webpack_require__(0);
+var ArrayReader = __webpack_require__(22);
 
 function Uint8ArrayReader(data) {
-    ArrayReader.call(this, data);
+    if (data) {
+        this.data = data;
+        this.length = this.data.length;
+        this.index = 0;
+        this.zero = 0;
+    }
 }
-utils.inherits(Uint8ArrayReader, ArrayReader);
+Uint8ArrayReader.prototype = new ArrayReader();
 /**
  * @see DataReader.readData
  */
@@ -7855,7 +4579,65 @@ module.exports = Uint8ArrayReader;
 
 
 /***/ }),
-/* 51 */
+/* 22 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var DataReader = __webpack_require__(20);
+
+function ArrayReader(data) {
+    if (data) {
+        this.data = data;
+        this.length = this.data.length;
+        this.index = 0;
+        this.zero = 0;
+
+        for(var i = 0; i < this.data.length; i++) {
+            data[i] = data[i] & 0xFF;
+        }
+    }
+}
+ArrayReader.prototype = new DataReader();
+/**
+ * @see DataReader.byteAt
+ */
+ArrayReader.prototype.byteAt = function(i) {
+    return this.data[this.zero + i];
+};
+/**
+ * @see DataReader.lastIndexOfSignature
+ */
+ArrayReader.prototype.lastIndexOfSignature = function(sig) {
+    var sig0 = sig.charCodeAt(0),
+        sig1 = sig.charCodeAt(1),
+        sig2 = sig.charCodeAt(2),
+        sig3 = sig.charCodeAt(3);
+    for (var i = this.length - 4; i >= 0; --i) {
+        if (this.data[i] === sig0 && this.data[i + 1] === sig1 && this.data[i + 2] === sig2 && this.data[i + 3] === sig3) {
+            return i - this.zero;
+        }
+    }
+
+    return -1;
+};
+/**
+ * @see DataReader.readData
+ */
+ArrayReader.prototype.readData = function(size) {
+    this.checkOffset(size);
+    if(size === 0) {
+        return [];
+    }
+    var result = this.data.slice(this.zero + this.index, this.zero + this.index + size);
+    this.index += size;
+    return result;
+};
+module.exports = ArrayReader;
+
+
+/***/ }),
+/* 23 */
 /***/ (function(module, exports) {
 
 /*
@@ -9105,20 +5887,20 @@ try{
 
 
 /***/ }),
-/* 52 */
+/* 24 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var JSZip = __webpack_require__(53);
-var DOMParser = __webpack_require__(2).DOMParser;
-var XMLSerializer = __webpack_require__(2).XMLSerializer;
+var JSZip = __webpack_require__(25);
+var DOMParser = __webpack_require__(1).DOMParser;
+var XMLSerializer = __webpack_require__(1).XMLSerializer;
 
-var Style = __webpack_require__(105);
-var Media = __webpack_require__(106);
-var RelContentType = __webpack_require__(107);
-var bulletsNumbering = __webpack_require__(108);
+var Style = __webpack_require__(49);
+var Media = __webpack_require__(50);
+var RelContentType = __webpack_require__(51);
+var bulletsNumbering = __webpack_require__(52);
 
 function DocxMerger(options, files) {
 
@@ -9213,25 +5995,35 @@ function DocxMerger(options, files) {
 module.exports = DocxMerger;
 
 /***/ }),
-/* 53 */
+/* 25 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
+var base64 = __webpack_require__(4);
+
+/**
+Usage:
+   zip = new JSZip();
+   zip.file("hello.txt", "Hello, World!").file("tempfile", "nothing");
+   zip.folder("images").file("smile.gif", base64Data, {base64: true});
+   zip.file("Xmas.txt", "Ho ho ho !", {date : new Date("December 25, 2007 00:00:01")});
+   zip.remove("tempfile");
+
+   base64zip = zip.generate();
+
+**/
+
 /**
  * Representation a of zip file in js
  * @constructor
+ * @param {String=|ArrayBuffer=|Uint8Array=} data the data to load, if any (optional).
+ * @param {Object=} options the options for creating this objects (optional).
  */
-function JSZip() {
+function JSZip(data, options) {
     // if this constructor is used without `new`, it adds `new` before itself:
-    if(!(this instanceof JSZip)) {
-        return new JSZip();
-    }
-
-    if(arguments.length) {
-        throw new Error("The constructor with parameters has been removed in JSZip 3.0, please check the upgrade guide.");
-    }
+    if(!(this instanceof JSZip)) return new JSZip(data, options);
 
     // object containing the files :
     // {
@@ -9244,6 +6036,9 @@ function JSZip() {
 
     // Where we are in the hierarchy
     this.root = "";
+    if (data) {
+        this.load(data, options);
+    }
     this.clone = function() {
         var newObj = new JSZip();
         for (var i in this) {
@@ -9254,421 +6049,66 @@ function JSZip() {
         return newObj;
     };
 }
-JSZip.prototype = __webpack_require__(54);
-JSZip.prototype.loadAsync = __webpack_require__(99);
-JSZip.support = __webpack_require__(4);
-JSZip.defaults = __webpack_require__(36);
+JSZip.prototype = __webpack_require__(5);
+JSZip.prototype.load = __webpack_require__(43);
+JSZip.support = __webpack_require__(3);
+JSZip.defaults = __webpack_require__(16);
 
-// TODO find a better way to handle this version,
-// a require('package.json').version doesn't work with webpack, see #327
-JSZip.version = "3.1.5";
+/**
+ * @deprecated
+ * This namespace will be removed in a future version without replacement.
+ */
+JSZip.utils = __webpack_require__(47);
 
-JSZip.loadAsync = function (content, options) {
-    return new JSZip().loadAsync(content, options);
+JSZip.base64 = {
+    /**
+     * @deprecated
+     * This method will be removed in a future version without replacement.
+     */
+    encode : function(input) {
+        return base64.encode(input);
+    },
+    /**
+     * @deprecated
+     * This method will be removed in a future version without replacement.
+     */
+    decode : function(input) {
+        return base64.decode(input);
+    }
 };
-
-JSZip.external = __webpack_require__(11);
+JSZip.compressions = __webpack_require__(6);
 module.exports = JSZip;
 
 
 /***/ }),
-/* 54 */
-/***/ (function(module, exports, __webpack_require__) {
+/* 26 */
+/***/ (function(module, exports) {
 
-"use strict";
+var g;
 
-var utf8 = __webpack_require__(7);
-var utils = __webpack_require__(0);
-var GenericWorker = __webpack_require__(1);
-var StreamHelper = __webpack_require__(35);
-var defaults = __webpack_require__(36);
-var CompressedObject = __webpack_require__(22);
-var ZipObject = __webpack_require__(85);
-var generate = __webpack_require__(86);
-var nodejsUtils = __webpack_require__(15);
-var NodejsStreamInputAdapter = __webpack_require__(98);
+// This works in non-strict mode
+g = (function() {
+	return this;
+})();
 
-
-/**
- * Add a file in the current folder.
- * @private
- * @param {string} name the name of the file
- * @param {String|ArrayBuffer|Uint8Array|Buffer} data the data of the file
- * @param {Object} originalOptions the options of the file
- * @return {Object} the new file.
- */
-var fileAdd = function(name, data, originalOptions) {
-    // be sure sub folders exist
-    var dataType = utils.getTypeOf(data),
-        parent;
-
-
-    /*
-     * Correct options.
-     */
-
-    var o = utils.extend(originalOptions || {}, defaults);
-    o.date = o.date || new Date();
-    if (o.compression !== null) {
-        o.compression = o.compression.toUpperCase();
-    }
-
-    if (typeof o.unixPermissions === "string") {
-        o.unixPermissions = parseInt(o.unixPermissions, 8);
-    }
-
-    // UNX_IFDIR  0040000 see zipinfo.c
-    if (o.unixPermissions && (o.unixPermissions & 0x4000)) {
-        o.dir = true;
-    }
-    // Bit 4    Directory
-    if (o.dosPermissions && (o.dosPermissions & 0x0010)) {
-        o.dir = true;
-    }
-
-    if (o.dir) {
-        name = forceTrailingSlash(name);
-    }
-    if (o.createFolders && (parent = parentFolder(name))) {
-        folderAdd.call(this, parent, true);
-    }
-
-    var isUnicodeString = dataType === "string" && o.binary === false && o.base64 === false;
-    if (!originalOptions || typeof originalOptions.binary === "undefined") {
-        o.binary = !isUnicodeString;
-    }
-
-
-    var isCompressedEmpty = (data instanceof CompressedObject) && data.uncompressedSize === 0;
-
-    if (isCompressedEmpty || o.dir || !data || data.length === 0) {
-        o.base64 = false;
-        o.binary = true;
-        data = "";
-        o.compression = "STORE";
-        dataType = "string";
-    }
-
-    /*
-     * Convert content to fit.
-     */
-
-    var zipObjectContent = null;
-    if (data instanceof CompressedObject || data instanceof GenericWorker) {
-        zipObjectContent = data;
-    } else if (nodejsUtils.isNode && nodejsUtils.isStream(data)) {
-        zipObjectContent = new NodejsStreamInputAdapter(name, data);
-    } else {
-        zipObjectContent = utils.prepareContent(name, data, o.binary, o.optimizedBinaryString, o.base64);
-    }
-
-    var object = new ZipObject(name, zipObjectContent, o);
-    this.files[name] = object;
-    /*
-    TODO: we can't throw an exception because we have async promises
-    (we can have a promise of a Date() for example) but returning a
-    promise is useless because file(name, data) returns the JSZip
-    object for chaining. Should we break that to allow the user
-    to catch the error ?
-
-    return external.Promise.resolve(zipObjectContent)
-    .then(function () {
-        return object;
-    });
-    */
-};
-
-/**
- * Find the parent folder of the path.
- * @private
- * @param {string} path the path to use
- * @return {string} the parent folder, or ""
- */
-var parentFolder = function (path) {
-    if (path.slice(-1) === '/') {
-        path = path.substring(0, path.length - 1);
-    }
-    var lastSlash = path.lastIndexOf('/');
-    return (lastSlash > 0) ? path.substring(0, lastSlash) : "";
-};
-
-/**
- * Returns the path with a slash at the end.
- * @private
- * @param {String} path the path to check.
- * @return {String} the path with a trailing slash.
- */
-var forceTrailingSlash = function(path) {
-    // Check the name ends with a /
-    if (path.slice(-1) !== "/") {
-        path += "/"; // IE doesn't like substr(-1)
-    }
-    return path;
-};
-
-/**
- * Add a (sub) folder in the current folder.
- * @private
- * @param {string} name the folder's name
- * @param {boolean=} [createFolders] If true, automatically create sub
- *  folders. Defaults to false.
- * @return {Object} the new folder.
- */
-var folderAdd = function(name, createFolders) {
-    createFolders = (typeof createFolders !== 'undefined') ? createFolders : defaults.createFolders;
-
-    name = forceTrailingSlash(name);
-
-    // Does this folder already exist?
-    if (!this.files[name]) {
-        fileAdd.call(this, name, null, {
-            dir: true,
-            createFolders: createFolders
-        });
-    }
-    return this.files[name];
-};
-
-/**
-* Cross-window, cross-Node-context regular expression detection
-* @param  {Object}  object Anything
-* @return {Boolean}        true if the object is a regular expression,
-* false otherwise
-*/
-function isRegExp(object) {
-    return Object.prototype.toString.call(object) === "[object RegExp]";
+try {
+	// This works if eval is allowed (see CSP)
+	g = g || Function("return this")() || (1,eval)("this");
+} catch(e) {
+	// This works if the window reference is available
+	if(typeof window === "object")
+		g = window;
 }
 
-// return the actual prototype of JSZip
-var out = {
-    /**
-     * @see loadAsync
-     */
-    load: function() {
-        throw new Error("This method has been removed in JSZip 3.0, please check the upgrade guide.");
-    },
+// g can still be undefined, but nothing to do about it...
+// We return undefined, instead of nothing here, so it's
+// easier to handle this case. if(!global) { ...}
 
-
-    /**
-     * Call a callback function for each entry at this folder level.
-     * @param {Function} cb the callback function:
-     * function (relativePath, file) {...}
-     * It takes 2 arguments : the relative path and the file.
-     */
-    forEach: function(cb) {
-        var filename, relativePath, file;
-        for (filename in this.files) {
-            if (!this.files.hasOwnProperty(filename)) {
-                continue;
-            }
-            file = this.files[filename];
-            relativePath = filename.slice(this.root.length, filename.length);
-            if (relativePath && filename.slice(0, this.root.length) === this.root) { // the file is in the current root
-                cb(relativePath, file); // TODO reverse the parameters ? need to be clean AND consistent with the filter search fn...
-            }
-        }
-    },
-
-    /**
-     * Filter nested files/folders with the specified function.
-     * @param {Function} search the predicate to use :
-     * function (relativePath, file) {...}
-     * It takes 2 arguments : the relative path and the file.
-     * @return {Array} An array of matching elements.
-     */
-    filter: function(search) {
-        var result = [];
-        this.forEach(function (relativePath, entry) {
-            if (search(relativePath, entry)) { // the file matches the function
-                result.push(entry);
-            }
-
-        });
-        return result;
-    },
-
-    /**
-     * Add a file to the zip file, or search a file.
-     * @param   {string|RegExp} name The name of the file to add (if data is defined),
-     * the name of the file to find (if no data) or a regex to match files.
-     * @param   {String|ArrayBuffer|Uint8Array|Buffer} data  The file data, either raw or base64 encoded
-     * @param   {Object} o     File options
-     * @return  {JSZip|Object|Array} this JSZip object (when adding a file),
-     * a file (when searching by string) or an array of files (when searching by regex).
-     */
-    file: function(name, data, o) {
-        if (arguments.length === 1) {
-            if (isRegExp(name)) {
-                var regexp = name;
-                return this.filter(function(relativePath, file) {
-                    return !file.dir && regexp.test(relativePath);
-                });
-            }
-            else { // text
-                var obj = this.files[this.root + name];
-                if (obj && !obj.dir) {
-                    return obj;
-                } else {
-                    return null;
-                }
-            }
-        }
-        else { // more than one argument : we have data !
-            name = this.root + name;
-            fileAdd.call(this, name, data, o);
-        }
-        return this;
-    },
-
-    /**
-     * Add a directory to the zip file, or search.
-     * @param   {String|RegExp} arg The name of the directory to add, or a regex to search folders.
-     * @return  {JSZip} an object with the new directory as the root, or an array containing matching folders.
-     */
-    folder: function(arg) {
-        if (!arg) {
-            return this;
-        }
-
-        if (isRegExp(arg)) {
-            return this.filter(function(relativePath, file) {
-                return file.dir && arg.test(relativePath);
-            });
-        }
-
-        // else, name is a new folder
-        var name = this.root + arg;
-        var newFolder = folderAdd.call(this, name);
-
-        // Allow chaining by returning a new object with this folder as the root
-        var ret = this.clone();
-        ret.root = newFolder.name;
-        return ret;
-    },
-
-    /**
-     * Delete a file, or a directory and all sub-files, from the zip
-     * @param {string} name the name of the file to delete
-     * @return {JSZip} this JSZip object
-     */
-    remove: function(name) {
-        name = this.root + name;
-        var file = this.files[name];
-        if (!file) {
-            // Look for any folders
-            if (name.slice(-1) !== "/") {
-                name += "/";
-            }
-            file = this.files[name];
-        }
-
-        if (file && !file.dir) {
-            // file
-            delete this.files[name];
-        } else {
-            // maybe a folder, delete recursively
-            var kids = this.filter(function(relativePath, file) {
-                return file.name.slice(0, name.length) === name;
-            });
-            for (var i = 0; i < kids.length; i++) {
-                delete this.files[kids[i].name];
-            }
-        }
-
-        return this;
-    },
-
-    /**
-     * Generate the complete zip file
-     * @param {Object} options the options to generate the zip file :
-     * - compression, "STORE" by default.
-     * - type, "base64" by default. Values are : string, base64, uint8array, arraybuffer, blob.
-     * @return {String|Uint8Array|ArrayBuffer|Buffer|Blob} the zip file
-     */
-    generate: function(options) {
-        throw new Error("This method has been removed in JSZip 3.0, please check the upgrade guide.");
-    },
-
-    /**
-     * Generate the complete zip file as an internal stream.
-     * @param {Object} options the options to generate the zip file :
-     * - compression, "STORE" by default.
-     * - type, "base64" by default. Values are : string, base64, uint8array, arraybuffer, blob.
-     * @return {StreamHelper} the streamed zip file.
-     */
-    generateInternalStream: function(options) {
-      var worker, opts = {};
-      try {
-          opts = utils.extend(options || {}, {
-              streamFiles: false,
-              compression: "STORE",
-              compressionOptions : null,
-              type: "",
-              platform: "DOS",
-              comment: null,
-              mimeType: 'application/zip',
-              encodeFileName: utf8.utf8encode
-          });
-
-          opts.type = opts.type.toLowerCase();
-          opts.compression = opts.compression.toUpperCase();
-
-          // "binarystring" is prefered but the internals use "string".
-          if(opts.type === "binarystring") {
-            opts.type = "string";
-          }
-
-          if (!opts.type) {
-            throw new Error("No output type specified.");
-          }
-
-          utils.checkSupport(opts.type);
-
-          // accept nodejs `process.platform`
-          if(
-              opts.platform === 'darwin' ||
-              opts.platform === 'freebsd' ||
-              opts.platform === 'linux' ||
-              opts.platform === 'sunos'
-          ) {
-              opts.platform = "UNIX";
-          }
-          if (opts.platform === 'win32') {
-              opts.platform = "DOS";
-          }
-
-          var comment = opts.comment || this.comment || "";
-          worker = generate.generateWorker(this, opts, comment);
-      } catch (e) {
-        worker = new GenericWorker("error");
-        worker.error(e);
-      }
-      return new StreamHelper(worker, opts.type || "string", opts.mimeType);
-    },
-    /**
-     * Generate the complete zip file asynchronously.
-     * @see generateInternalStream
-     */
-    generateAsync: function(options, onUpdate) {
-        return this.generateInternalStream(options).accumulate(onUpdate);
-    },
-    /**
-     * Generate the complete zip file asynchronously.
-     * @see generateInternalStream
-     */
-    generateNodeStream: function(options, onUpdate) {
-        options = options || {};
-        if (!options.type) {
-            options.type = "nodebuffer";
-        }
-        return this.generateInternalStream(options).toNodejsStream(onUpdate);
-    }
-};
-module.exports = out;
+module.exports = g;
 
 
 /***/ }),
-/* 55 */
+/* 27 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -9826,7 +6266,7 @@ function fromByteArray (uint8) {
 
 
 /***/ }),
-/* 56 */
+/* 28 */
 /***/ (function(module, exports) {
 
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
@@ -9916,1482 +6356,52 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
 
 
 /***/ }),
-/* 57 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var Stream = (function (){
-  try {
-    return __webpack_require__(12); // hack to fix a circular dependency issue when used with browserify
-  } catch(_){}
-}());
-exports = module.exports = __webpack_require__(27);
-exports.Stream = Stream || exports;
-exports.Readable = exports;
-exports.Writable = __webpack_require__(18);
-exports.Duplex = __webpack_require__(6);
-exports.Transform = __webpack_require__(19);
-exports.PassThrough = __webpack_require__(29);
-
-
-/***/ }),
-/* 58 */
-/***/ (function(module, exports) {
-
-/* (ignored) */
-
-/***/ }),
-/* 59 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/* WEBPACK VAR INJECTION */(function(global) {var scope = (typeof global !== "undefined" && global) ||
-            (typeof self !== "undefined" && self) ||
-            window;
-var apply = Function.prototype.apply;
-
-// DOM APIs, for completeness
-
-exports.setTimeout = function() {
-  return new Timeout(apply.call(setTimeout, scope, arguments), clearTimeout);
-};
-exports.setInterval = function() {
-  return new Timeout(apply.call(setInterval, scope, arguments), clearInterval);
-};
-exports.clearTimeout =
-exports.clearInterval = function(timeout) {
-  if (timeout) {
-    timeout.close();
-  }
-};
-
-function Timeout(id, clearFn) {
-  this._id = id;
-  this._clearFn = clearFn;
-}
-Timeout.prototype.unref = Timeout.prototype.ref = function() {};
-Timeout.prototype.close = function() {
-  this._clearFn.call(scope, this._id);
-};
-
-// Does not start the time, just sets up the members needed.
-exports.enroll = function(item, msecs) {
-  clearTimeout(item._idleTimeoutId);
-  item._idleTimeout = msecs;
-};
-
-exports.unenroll = function(item) {
-  clearTimeout(item._idleTimeoutId);
-  item._idleTimeout = -1;
-};
-
-exports._unrefActive = exports.active = function(item) {
-  clearTimeout(item._idleTimeoutId);
-
-  var msecs = item._idleTimeout;
-  if (msecs >= 0) {
-    item._idleTimeoutId = setTimeout(function onTimeout() {
-      if (item._onTimeout)
-        item._onTimeout();
-    }, msecs);
-  }
-};
-
-// setimmediate attaches itself to the global object
-__webpack_require__(60);
-// On some exotic environments, it's not clear which object `setimmediate` was
-// able to install onto.  Search each possibility in the same order as the
-// `setimmediate` library.
-exports.setImmediate = (typeof self !== "undefined" && self.setImmediate) ||
-                       (typeof global !== "undefined" && global.setImmediate) ||
-                       (this && this.setImmediate);
-exports.clearImmediate = (typeof self !== "undefined" && self.clearImmediate) ||
-                         (typeof global !== "undefined" && global.clearImmediate) ||
-                         (this && this.clearImmediate);
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9)))
-
-/***/ }),
-/* 60 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/* WEBPACK VAR INJECTION */(function(global, process) {(function (global, undefined) {
-    "use strict";
-
-    if (global.setImmediate) {
-        return;
-    }
-
-    var nextHandle = 1; // Spec says greater than zero
-    var tasksByHandle = {};
-    var currentlyRunningATask = false;
-    var doc = global.document;
-    var registerImmediate;
-
-    function setImmediate(callback) {
-      // Callback can either be a function or a string
-      if (typeof callback !== "function") {
-        callback = new Function("" + callback);
-      }
-      // Copy function arguments
-      var args = new Array(arguments.length - 1);
-      for (var i = 0; i < args.length; i++) {
-          args[i] = arguments[i + 1];
-      }
-      // Store and register the task
-      var task = { callback: callback, args: args };
-      tasksByHandle[nextHandle] = task;
-      registerImmediate(nextHandle);
-      return nextHandle++;
-    }
-
-    function clearImmediate(handle) {
-        delete tasksByHandle[handle];
-    }
-
-    function run(task) {
-        var callback = task.callback;
-        var args = task.args;
-        switch (args.length) {
-        case 0:
-            callback();
-            break;
-        case 1:
-            callback(args[0]);
-            break;
-        case 2:
-            callback(args[0], args[1]);
-            break;
-        case 3:
-            callback(args[0], args[1], args[2]);
-            break;
-        default:
-            callback.apply(undefined, args);
-            break;
-        }
-    }
-
-    function runIfPresent(handle) {
-        // From the spec: "Wait until any invocations of this algorithm started before this one have completed."
-        // So if we're currently running a task, we'll need to delay this invocation.
-        if (currentlyRunningATask) {
-            // Delay by doing a setTimeout. setImmediate was tried instead, but in Firefox 7 it generated a
-            // "too much recursion" error.
-            setTimeout(runIfPresent, 0, handle);
-        } else {
-            var task = tasksByHandle[handle];
-            if (task) {
-                currentlyRunningATask = true;
-                try {
-                    run(task);
-                } finally {
-                    clearImmediate(handle);
-                    currentlyRunningATask = false;
-                }
-            }
-        }
-    }
-
-    function installNextTickImplementation() {
-        registerImmediate = function(handle) {
-            process.nextTick(function () { runIfPresent(handle); });
-        };
-    }
-
-    function canUsePostMessage() {
-        // The test against `importScripts` prevents this implementation from being installed inside a web worker,
-        // where `global.postMessage` means something completely different and can't be used for this purpose.
-        if (global.postMessage && !global.importScripts) {
-            var postMessageIsAsynchronous = true;
-            var oldOnMessage = global.onmessage;
-            global.onmessage = function() {
-                postMessageIsAsynchronous = false;
-            };
-            global.postMessage("", "*");
-            global.onmessage = oldOnMessage;
-            return postMessageIsAsynchronous;
-        }
-    }
-
-    function installPostMessageImplementation() {
-        // Installs an event handler on `global` for the `message` event: see
-        // * https://developer.mozilla.org/en/DOM/window.postMessage
-        // * http://www.whatwg.org/specs/web-apps/current-work/multipage/comms.html#crossDocumentMessages
-
-        var messagePrefix = "setImmediate$" + Math.random() + "$";
-        var onGlobalMessage = function(event) {
-            if (event.source === global &&
-                typeof event.data === "string" &&
-                event.data.indexOf(messagePrefix) === 0) {
-                runIfPresent(+event.data.slice(messagePrefix.length));
-            }
-        };
-
-        if (global.addEventListener) {
-            global.addEventListener("message", onGlobalMessage, false);
-        } else {
-            global.attachEvent("onmessage", onGlobalMessage);
-        }
-
-        registerImmediate = function(handle) {
-            global.postMessage(messagePrefix + handle, "*");
-        };
-    }
-
-    function installMessageChannelImplementation() {
-        var channel = new MessageChannel();
-        channel.port1.onmessage = function(event) {
-            var handle = event.data;
-            runIfPresent(handle);
-        };
-
-        registerImmediate = function(handle) {
-            channel.port2.postMessage(handle);
-        };
-    }
-
-    function installReadyStateChangeImplementation() {
-        var html = doc.documentElement;
-        registerImmediate = function(handle) {
-            // Create a <script> element; its readystatechange event will be fired asynchronously once it is inserted
-            // into the document. Do so, thus queuing up the task. Remember to clean up once it's been called.
-            var script = doc.createElement("script");
-            script.onreadystatechange = function () {
-                runIfPresent(handle);
-                script.onreadystatechange = null;
-                html.removeChild(script);
-                script = null;
-            };
-            html.appendChild(script);
-        };
-    }
-
-    function installSetTimeoutImplementation() {
-        registerImmediate = function(handle) {
-            setTimeout(runIfPresent, 0, handle);
-        };
-    }
-
-    // If supported, we should attach to the prototype of global, since that is where setTimeout et al. live.
-    var attachTo = Object.getPrototypeOf && Object.getPrototypeOf(global);
-    attachTo = attachTo && attachTo.setTimeout ? attachTo : global;
-
-    // Don't get fooled by e.g. browserify environments.
-    if ({}.toString.call(global.process) === "[object process]") {
-        // For Node.js before 0.9
-        installNextTickImplementation();
-
-    } else if (canUsePostMessage()) {
-        // For non-IE10 modern browsers
-        installPostMessageImplementation();
-
-    } else if (global.MessageChannel) {
-        // For web workers, where supported
-        installMessageChannelImplementation();
-
-    } else if (doc && "onreadystatechange" in doc.createElement("script")) {
-        // For IE 6–8
-        installReadyStateChangeImplementation();
-
-    } else {
-        // For older browsers
-        installSetTimeoutImplementation();
-    }
-
-    attachTo.setImmediate = setImmediate;
-    attachTo.clearImmediate = clearImmediate;
-}(typeof self === "undefined" ? typeof global === "undefined" ? this : global : self));
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9), __webpack_require__(14)))
-
-/***/ }),
-/* 61 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/* WEBPACK VAR INJECTION */(function(global) {
-/**
- * Module exports.
- */
-
-module.exports = deprecate;
-
-/**
- * Mark that a method should not be used.
- * Returns a modified function which warns once by default.
- *
- * If `localStorage.noDeprecation = true` is set, then it is a no-op.
- *
- * If `localStorage.throwDeprecation = true` is set, then deprecated functions
- * will throw an Error when invoked.
- *
- * If `localStorage.traceDeprecation = true` is set, then deprecated functions
- * will invoke `console.trace()` instead of `console.error()`.
- *
- * @param {Function} fn - the function to deprecate
- * @param {String} msg - the string to print to the console when `fn` is invoked
- * @returns {Function} a new "deprecated" version of `fn`
- * @api public
- */
-
-function deprecate (fn, msg) {
-  if (config('noDeprecation')) {
-    return fn;
-  }
-
-  var warned = false;
-  function deprecated() {
-    if (!warned) {
-      if (config('throwDeprecation')) {
-        throw new Error(msg);
-      } else if (config('traceDeprecation')) {
-        console.trace(msg);
-      } else {
-        console.warn(msg);
-      }
-      warned = true;
-    }
-    return fn.apply(this, arguments);
-  }
-
-  return deprecated;
-}
-
-/**
- * Checks `localStorage` for boolean values for the given `name`.
- *
- * @param {String} name
- * @returns {Boolean}
- * @api private
- */
-
-function config (name) {
-  // accessing global.localStorage can trigger a DOMException in sandboxed iframes
-  try {
-    if (!global.localStorage) return false;
-  } catch (_) {
-    return false;
-  }
-  var val = global.localStorage[name];
-  if (null == val) return false;
-  return String(val).toLowerCase() === 'true';
-}
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9)))
-
-/***/ }),
-/* 62 */
-/***/ (function(module, exports, __webpack_require__) {
-
-/* eslint-disable node/no-deprecated-api */
-var buffer = __webpack_require__(3)
-var Buffer = buffer.Buffer
-
-// alternative to using Object.keys for old browsers
-function copyProps (src, dst) {
-  for (var key in src) {
-    dst[key] = src[key]
-  }
-}
-if (Buffer.from && Buffer.alloc && Buffer.allocUnsafe && Buffer.allocUnsafeSlow) {
-  module.exports = buffer
-} else {
-  // Copy properties from require('buffer')
-  copyProps(buffer, exports)
-  exports.Buffer = SafeBuffer
-}
-
-function SafeBuffer (arg, encodingOrOffset, length) {
-  return Buffer(arg, encodingOrOffset, length)
-}
-
-// Copy static methods from Buffer
-copyProps(Buffer, SafeBuffer)
-
-SafeBuffer.from = function (arg, encodingOrOffset, length) {
-  if (typeof arg === 'number') {
-    throw new TypeError('Argument must not be a number')
-  }
-  return Buffer(arg, encodingOrOffset, length)
-}
-
-SafeBuffer.alloc = function (size, fill, encoding) {
-  if (typeof size !== 'number') {
-    throw new TypeError('Argument must be a number')
-  }
-  var buf = Buffer(size)
-  if (fill !== undefined) {
-    if (typeof encoding === 'string') {
-      buf.fill(fill, encoding)
-    } else {
-      buf.fill(fill)
-    }
-  } else {
-    buf.fill(0)
-  }
-  return buf
-}
-
-SafeBuffer.allocUnsafe = function (size) {
-  if (typeof size !== 'number') {
-    throw new TypeError('Argument must be a number')
-  }
-  return Buffer(size)
-}
-
-SafeBuffer.allocUnsafeSlow = function (size) {
-  if (typeof size !== 'number') {
-    throw new TypeError('Argument must be a number')
-  }
-  return buffer.SlowBuffer(size)
-}
-
-
-/***/ }),
-/* 63 */
-/***/ (function(module, exports, __webpack_require__) {
-
-module.exports = __webpack_require__(18)
-
-
-/***/ }),
-/* 64 */
-/***/ (function(module, exports, __webpack_require__) {
-
-module.exports = __webpack_require__(6)
-
-
-/***/ }),
-/* 65 */
-/***/ (function(module, exports, __webpack_require__) {
-
-module.exports = __webpack_require__(19)
-
-
-/***/ }),
-/* 66 */
-/***/ (function(module, exports, __webpack_require__) {
-
-module.exports = __webpack_require__(29)
-
-
-/***/ }),
-/* 67 */
-/***/ (function(module, exports, __webpack_require__) {
-
-__webpack_require__(68);
-module.exports = __webpack_require__(31).setImmediate;
-
-/***/ }),
-/* 68 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var $export = __webpack_require__(69)
-  , $task   = __webpack_require__(77);
-$export($export.G + $export.B, {
-  setImmediate:   $task.set,
-  clearImmediate: $task.clear
-});
-
-/***/ }),
-/* 69 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var global    = __webpack_require__(16)
-  , core      = __webpack_require__(31)
-  , ctx       = __webpack_require__(32)
-  , hide      = __webpack_require__(71)
-  , PROTOTYPE = 'prototype';
-
-var $export = function(type, name, source){
-  var IS_FORCED = type & $export.F
-    , IS_GLOBAL = type & $export.G
-    , IS_STATIC = type & $export.S
-    , IS_PROTO  = type & $export.P
-    , IS_BIND   = type & $export.B
-    , IS_WRAP   = type & $export.W
-    , exports   = IS_GLOBAL ? core : core[name] || (core[name] = {})
-    , expProto  = exports[PROTOTYPE]
-    , target    = IS_GLOBAL ? global : IS_STATIC ? global[name] : (global[name] || {})[PROTOTYPE]
-    , key, own, out;
-  if(IS_GLOBAL)source = name;
-  for(key in source){
-    // contains in native
-    own = !IS_FORCED && target && target[key] !== undefined;
-    if(own && key in exports)continue;
-    // export native or passed
-    out = own ? target[key] : source[key];
-    // prevent global pollution for namespaces
-    exports[key] = IS_GLOBAL && typeof target[key] != 'function' ? source[key]
-    // bind timers to global for call from export context
-    : IS_BIND && own ? ctx(out, global)
-    // wrap global constructors for prevent change them in library
-    : IS_WRAP && target[key] == out ? (function(C){
-      var F = function(a, b, c){
-        if(this instanceof C){
-          switch(arguments.length){
-            case 0: return new C;
-            case 1: return new C(a);
-            case 2: return new C(a, b);
-          } return new C(a, b, c);
-        } return C.apply(this, arguments);
-      };
-      F[PROTOTYPE] = C[PROTOTYPE];
-      return F;
-    // make static versions for prototype methods
-    })(out) : IS_PROTO && typeof out == 'function' ? ctx(Function.call, out) : out;
-    // export proto methods to core.%CONSTRUCTOR%.methods.%NAME%
-    if(IS_PROTO){
-      (exports.virtual || (exports.virtual = {}))[key] = out;
-      // export proto methods to core.%CONSTRUCTOR%.prototype.%NAME%
-      if(type & $export.R && expProto && !expProto[key])hide(expProto, key, out);
-    }
-  }
-};
-// type bitmap
-$export.F = 1;   // forced
-$export.G = 2;   // global
-$export.S = 4;   // static
-$export.P = 8;   // proto
-$export.B = 16;  // bind
-$export.W = 32;  // wrap
-$export.U = 64;  // safe
-$export.R = 128; // real proto method for `library` 
-module.exports = $export;
-
-/***/ }),
-/* 70 */
-/***/ (function(module, exports) {
-
-module.exports = function(it){
-  if(typeof it != 'function')throw TypeError(it + ' is not a function!');
-  return it;
-};
-
-/***/ }),
-/* 71 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var dP         = __webpack_require__(72)
-  , createDesc = __webpack_require__(76);
-module.exports = __webpack_require__(21) ? function(object, key, value){
-  return dP.f(object, key, createDesc(1, value));
-} : function(object, key, value){
-  object[key] = value;
-  return object;
-};
-
-/***/ }),
-/* 72 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var anObject       = __webpack_require__(73)
-  , IE8_DOM_DEFINE = __webpack_require__(74)
-  , toPrimitive    = __webpack_require__(75)
-  , dP             = Object.defineProperty;
-
-exports.f = __webpack_require__(21) ? Object.defineProperty : function defineProperty(O, P, Attributes){
-  anObject(O);
-  P = toPrimitive(P, true);
-  anObject(Attributes);
-  if(IE8_DOM_DEFINE)try {
-    return dP(O, P, Attributes);
-  } catch(e){ /* empty */ }
-  if('get' in Attributes || 'set' in Attributes)throw TypeError('Accessors not supported!');
-  if('value' in Attributes)O[P] = Attributes.value;
-  return O;
-};
-
-/***/ }),
-/* 73 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var isObject = __webpack_require__(20);
-module.exports = function(it){
-  if(!isObject(it))throw TypeError(it + ' is not an object!');
-  return it;
-};
-
-/***/ }),
-/* 74 */
-/***/ (function(module, exports, __webpack_require__) {
-
-module.exports = !__webpack_require__(21) && !__webpack_require__(33)(function(){
-  return Object.defineProperty(__webpack_require__(34)('div'), 'a', {get: function(){ return 7; }}).a != 7;
-});
-
-/***/ }),
-/* 75 */
-/***/ (function(module, exports, __webpack_require__) {
-
-// 7.1.1 ToPrimitive(input [, PreferredType])
-var isObject = __webpack_require__(20);
-// instead of the ES6 spec version, we didn't implement @@toPrimitive case
-// and the second argument - flag - preferred type is a string
-module.exports = function(it, S){
-  if(!isObject(it))return it;
-  var fn, val;
-  if(S && typeof (fn = it.toString) == 'function' && !isObject(val = fn.call(it)))return val;
-  if(typeof (fn = it.valueOf) == 'function' && !isObject(val = fn.call(it)))return val;
-  if(!S && typeof (fn = it.toString) == 'function' && !isObject(val = fn.call(it)))return val;
-  throw TypeError("Can't convert object to primitive value");
-};
-
-/***/ }),
-/* 76 */
-/***/ (function(module, exports) {
-
-module.exports = function(bitmap, value){
-  return {
-    enumerable  : !(bitmap & 1),
-    configurable: !(bitmap & 2),
-    writable    : !(bitmap & 4),
-    value       : value
-  };
-};
-
-/***/ }),
-/* 77 */
-/***/ (function(module, exports, __webpack_require__) {
-
-var ctx                = __webpack_require__(32)
-  , invoke             = __webpack_require__(78)
-  , html               = __webpack_require__(79)
-  , cel                = __webpack_require__(34)
-  , global             = __webpack_require__(16)
-  , process            = global.process
-  , setTask            = global.setImmediate
-  , clearTask          = global.clearImmediate
-  , MessageChannel     = global.MessageChannel
-  , counter            = 0
-  , queue              = {}
-  , ONREADYSTATECHANGE = 'onreadystatechange'
-  , defer, channel, port;
-var run = function(){
-  var id = +this;
-  if(queue.hasOwnProperty(id)){
-    var fn = queue[id];
-    delete queue[id];
-    fn();
-  }
-};
-var listener = function(event){
-  run.call(event.data);
-};
-// Node.js 0.9+ & IE10+ has setImmediate, otherwise:
-if(!setTask || !clearTask){
-  setTask = function setImmediate(fn){
-    var args = [], i = 1;
-    while(arguments.length > i)args.push(arguments[i++]);
-    queue[++counter] = function(){
-      invoke(typeof fn == 'function' ? fn : Function(fn), args);
-    };
-    defer(counter);
-    return counter;
-  };
-  clearTask = function clearImmediate(id){
-    delete queue[id];
-  };
-  // Node.js 0.8-
-  if(__webpack_require__(80)(process) == 'process'){
-    defer = function(id){
-      process.nextTick(ctx(run, id, 1));
-    };
-  // Browsers with MessageChannel, includes WebWorkers
-  } else if(MessageChannel){
-    channel = new MessageChannel;
-    port    = channel.port2;
-    channel.port1.onmessage = listener;
-    defer = ctx(port.postMessage, port, 1);
-  // Browsers with postMessage, skip WebWorkers
-  // IE8 has postMessage, but it's sync & typeof its postMessage is 'object'
-  } else if(global.addEventListener && typeof postMessage == 'function' && !global.importScripts){
-    defer = function(id){
-      global.postMessage(id + '', '*');
-    };
-    global.addEventListener('message', listener, false);
-  // IE8-
-  } else if(ONREADYSTATECHANGE in cel('script')){
-    defer = function(id){
-      html.appendChild(cel('script'))[ONREADYSTATECHANGE] = function(){
-        html.removeChild(this);
-        run.call(id);
-      };
-    };
-  // Rest old browsers
-  } else {
-    defer = function(id){
-      setTimeout(ctx(run, id, 1), 0);
-    };
-  }
-}
-module.exports = {
-  set:   setTask,
-  clear: clearTask
-};
-
-/***/ }),
-/* 78 */
-/***/ (function(module, exports) {
-
-// fast apply, http://jsperf.lnkit.com/fast-apply/5
-module.exports = function(fn, args, that){
-  var un = that === undefined;
-  switch(args.length){
-    case 0: return un ? fn()
-                      : fn.call(that);
-    case 1: return un ? fn(args[0])
-                      : fn.call(that, args[0]);
-    case 2: return un ? fn(args[0], args[1])
-                      : fn.call(that, args[0], args[1]);
-    case 3: return un ? fn(args[0], args[1], args[2])
-                      : fn.call(that, args[0], args[1], args[2]);
-    case 4: return un ? fn(args[0], args[1], args[2], args[3])
-                      : fn.call(that, args[0], args[1], args[2], args[3]);
-  } return              fn.apply(that, args);
-};
-
-/***/ }),
-/* 79 */
-/***/ (function(module, exports, __webpack_require__) {
-
-module.exports = __webpack_require__(16).document && document.documentElement;
-
-/***/ }),
-/* 80 */
+/* 29 */
 /***/ (function(module, exports) {
 
 var toString = {}.toString;
 
-module.exports = function(it){
-  return toString.call(it).slice(8, -1);
-};
-
-/***/ }),
-/* 81 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-var immediate = __webpack_require__(82);
-
-/* istanbul ignore next */
-function INTERNAL() {}
-
-var handlers = {};
-
-var REJECTED = ['REJECTED'];
-var FULFILLED = ['FULFILLED'];
-var PENDING = ['PENDING'];
-
-module.exports = Promise;
-
-function Promise(resolver) {
-  if (typeof resolver !== 'function') {
-    throw new TypeError('resolver must be a function');
-  }
-  this.state = PENDING;
-  this.queue = [];
-  this.outcome = void 0;
-  if (resolver !== INTERNAL) {
-    safelyResolveThenable(this, resolver);
-  }
-}
-
-Promise.prototype["catch"] = function (onRejected) {
-  return this.then(null, onRejected);
-};
-Promise.prototype.then = function (onFulfilled, onRejected) {
-  if (typeof onFulfilled !== 'function' && this.state === FULFILLED ||
-    typeof onRejected !== 'function' && this.state === REJECTED) {
-    return this;
-  }
-  var promise = new this.constructor(INTERNAL);
-  if (this.state !== PENDING) {
-    var resolver = this.state === FULFILLED ? onFulfilled : onRejected;
-    unwrap(promise, resolver, this.outcome);
-  } else {
-    this.queue.push(new QueueItem(promise, onFulfilled, onRejected));
-  }
-
-  return promise;
-};
-function QueueItem(promise, onFulfilled, onRejected) {
-  this.promise = promise;
-  if (typeof onFulfilled === 'function') {
-    this.onFulfilled = onFulfilled;
-    this.callFulfilled = this.otherCallFulfilled;
-  }
-  if (typeof onRejected === 'function') {
-    this.onRejected = onRejected;
-    this.callRejected = this.otherCallRejected;
-  }
-}
-QueueItem.prototype.callFulfilled = function (value) {
-  handlers.resolve(this.promise, value);
-};
-QueueItem.prototype.otherCallFulfilled = function (value) {
-  unwrap(this.promise, this.onFulfilled, value);
-};
-QueueItem.prototype.callRejected = function (value) {
-  handlers.reject(this.promise, value);
-};
-QueueItem.prototype.otherCallRejected = function (value) {
-  unwrap(this.promise, this.onRejected, value);
-};
-
-function unwrap(promise, func, value) {
-  immediate(function () {
-    var returnValue;
-    try {
-      returnValue = func(value);
-    } catch (e) {
-      return handlers.reject(promise, e);
-    }
-    if (returnValue === promise) {
-      handlers.reject(promise, new TypeError('Cannot resolve promise with itself'));
-    } else {
-      handlers.resolve(promise, returnValue);
-    }
-  });
-}
-
-handlers.resolve = function (self, value) {
-  var result = tryCatch(getThen, value);
-  if (result.status === 'error') {
-    return handlers.reject(self, result.value);
-  }
-  var thenable = result.value;
-
-  if (thenable) {
-    safelyResolveThenable(self, thenable);
-  } else {
-    self.state = FULFILLED;
-    self.outcome = value;
-    var i = -1;
-    var len = self.queue.length;
-    while (++i < len) {
-      self.queue[i].callFulfilled(value);
-    }
-  }
-  return self;
-};
-handlers.reject = function (self, error) {
-  self.state = REJECTED;
-  self.outcome = error;
-  var i = -1;
-  var len = self.queue.length;
-  while (++i < len) {
-    self.queue[i].callRejected(error);
-  }
-  return self;
-};
-
-function getThen(obj) {
-  // Make sure we only access the accessor once as required by the spec
-  var then = obj && obj.then;
-  if (obj && (typeof obj === 'object' || typeof obj === 'function') && typeof then === 'function') {
-    return function appyThen() {
-      then.apply(obj, arguments);
-    };
-  }
-}
-
-function safelyResolveThenable(self, thenable) {
-  // Either fulfill, reject or reject with error
-  var called = false;
-  function onError(value) {
-    if (called) {
-      return;
-    }
-    called = true;
-    handlers.reject(self, value);
-  }
-
-  function onSuccess(value) {
-    if (called) {
-      return;
-    }
-    called = true;
-    handlers.resolve(self, value);
-  }
-
-  function tryToUnwrap() {
-    thenable(onSuccess, onError);
-  }
-
-  var result = tryCatch(tryToUnwrap);
-  if (result.status === 'error') {
-    onError(result.value);
-  }
-}
-
-function tryCatch(func, value) {
-  var out = {};
-  try {
-    out.value = func(value);
-    out.status = 'success';
-  } catch (e) {
-    out.status = 'error';
-    out.value = e;
-  }
-  return out;
-}
-
-Promise.resolve = resolve;
-function resolve(value) {
-  if (value instanceof this) {
-    return value;
-  }
-  return handlers.resolve(new this(INTERNAL), value);
-}
-
-Promise.reject = reject;
-function reject(reason) {
-  var promise = new this(INTERNAL);
-  return handlers.reject(promise, reason);
-}
-
-Promise.all = all;
-function all(iterable) {
-  var self = this;
-  if (Object.prototype.toString.call(iterable) !== '[object Array]') {
-    return this.reject(new TypeError('must be an array'));
-  }
-
-  var len = iterable.length;
-  var called = false;
-  if (!len) {
-    return this.resolve([]);
-  }
-
-  var values = new Array(len);
-  var resolved = 0;
-  var i = -1;
-  var promise = new this(INTERNAL);
-
-  while (++i < len) {
-    allResolver(iterable[i], i);
-  }
-  return promise;
-  function allResolver(value, i) {
-    self.resolve(value).then(resolveFromAll, function (error) {
-      if (!called) {
-        called = true;
-        handlers.reject(promise, error);
-      }
-    });
-    function resolveFromAll(outValue) {
-      values[i] = outValue;
-      if (++resolved === len && !called) {
-        called = true;
-        handlers.resolve(promise, values);
-      }
-    }
-  }
-}
-
-Promise.race = race;
-function race(iterable) {
-  var self = this;
-  if (Object.prototype.toString.call(iterable) !== '[object Array]') {
-    return this.reject(new TypeError('must be an array'));
-  }
-
-  var len = iterable.length;
-  var called = false;
-  if (!len) {
-    return this.resolve([]);
-  }
-
-  var i = -1;
-  var promise = new this(INTERNAL);
-
-  while (++i < len) {
-    resolver(iterable[i]);
-  }
-  return promise;
-  function resolver(value) {
-    self.resolve(value).then(function (response) {
-      if (!called) {
-        called = true;
-        handlers.resolve(promise, response);
-      }
-    }, function (error) {
-      if (!called) {
-        called = true;
-        handlers.reject(promise, error);
-      }
-    });
-  }
-}
-
-
-/***/ }),
-/* 82 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-/* WEBPACK VAR INJECTION */(function(global) {
-var Mutation = global.MutationObserver || global.WebKitMutationObserver;
-
-var scheduleDrain;
-
-{
-  if (Mutation) {
-    var called = 0;
-    var observer = new Mutation(nextTick);
-    var element = global.document.createTextNode('');
-    observer.observe(element, {
-      characterData: true
-    });
-    scheduleDrain = function () {
-      element.data = (called = ++called % 2);
-    };
-  } else if (!global.setImmediate && typeof global.MessageChannel !== 'undefined') {
-    var channel = new global.MessageChannel();
-    channel.port1.onmessage = nextTick;
-    scheduleDrain = function () {
-      channel.port2.postMessage(0);
-    };
-  } else if ('document' in global && 'onreadystatechange' in global.document.createElement('script')) {
-    scheduleDrain = function () {
-
-      // Create a <script> element; its readystatechange event will be fired asynchronously once it is inserted
-      // into the document. Do so, thus queuing up the task. Remember to clean up once it's been called.
-      var scriptEl = global.document.createElement('script');
-      scriptEl.onreadystatechange = function () {
-        nextTick();
-
-        scriptEl.onreadystatechange = null;
-        scriptEl.parentNode.removeChild(scriptEl);
-        scriptEl = null;
-      };
-      global.document.documentElement.appendChild(scriptEl);
-    };
-  } else {
-    scheduleDrain = function () {
-      setTimeout(nextTick, 0);
-    };
-  }
-}
-
-var draining;
-var queue = [];
-//named nextTick for less confusing stack traces
-function nextTick() {
-  draining = true;
-  var i, oldQueue;
-  var len = queue.length;
-  while (len) {
-    oldQueue = queue;
-    queue = [];
-    i = -1;
-    while (++i < len) {
-      oldQueue[i]();
-    }
-    len = queue.length;
-  }
-  draining = false;
-}
-
-module.exports = immediate;
-function immediate(task) {
-  if (queue.push(task) === 1 && !draining) {
-    scheduleDrain();
-  }
-}
-
-/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(9)))
-
-/***/ }),
-/* 83 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var GenericWorker = __webpack_require__(1);
-var utils = __webpack_require__(0);
-
-/**
- * A worker which convert chunks to a specified type.
- * @constructor
- * @param {String} destType the destination type.
- */
-function ConvertWorker(destType) {
-    GenericWorker.call(this, "ConvertWorker to " + destType);
-    this.destType = destType;
-}
-utils.inherits(ConvertWorker, GenericWorker);
-
-/**
- * @see GenericWorker.processChunk
- */
-ConvertWorker.prototype.processChunk = function (chunk) {
-    this.push({
-        data : utils.transformTo(this.destType, chunk.data),
-        meta : chunk.meta
-    });
-};
-module.exports = ConvertWorker;
-
-
-/***/ }),
-/* 84 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var Readable = __webpack_require__(26).Readable;
-
-var utils = __webpack_require__(0);
-utils.inherits(NodejsStreamOutputAdapter, Readable);
-
-/**
-* A nodejs stream using a worker as source.
-* @see the SourceWrapper in http://nodejs.org/api/stream.html
-* @constructor
-* @param {StreamHelper} helper the helper wrapping the worker
-* @param {Object} options the nodejs stream options
-* @param {Function} updateCb the update callback.
-*/
-function NodejsStreamOutputAdapter(helper, options, updateCb) {
-    Readable.call(this, options);
-    this._helper = helper;
-
-    var self = this;
-    helper.on("data", function (data, meta) {
-        if (!self.push(data)) {
-            self._helper.pause();
-        }
-        if(updateCb) {
-            updateCb(meta);
-        }
-    })
-    .on("error", function(e) {
-        self.emit('error', e);
-    })
-    .on("end", function () {
-        self.push(null);
-    });
-}
-
-
-NodejsStreamOutputAdapter.prototype._read = function() {
-    this._helper.resume();
-};
-
-module.exports = NodejsStreamOutputAdapter;
-
-
-/***/ }),
-/* 85 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var StreamHelper = __webpack_require__(35);
-var DataWorker = __webpack_require__(37);
-var utf8 = __webpack_require__(7);
-var CompressedObject = __webpack_require__(22);
-var GenericWorker = __webpack_require__(1);
-
-/**
- * A simple object representing a file in the zip file.
- * @constructor
- * @param {string} name the name of the file
- * @param {String|ArrayBuffer|Uint8Array|Buffer} data the data
- * @param {Object} options the options of the file
- */
-var ZipObject = function(name, data, options) {
-    this.name = name;
-    this.dir = options.dir;
-    this.date = options.date;
-    this.comment = options.comment;
-    this.unixPermissions = options.unixPermissions;
-    this.dosPermissions = options.dosPermissions;
-
-    this._data = data;
-    this._dataBinary = options.binary;
-    // keep only the compression
-    this.options = {
-        compression : options.compression,
-        compressionOptions : options.compressionOptions
-    };
-};
-
-ZipObject.prototype = {
-    /**
-     * Create an internal stream for the content of this object.
-     * @param {String} type the type of each chunk.
-     * @return StreamHelper the stream.
-     */
-    internalStream: function (type) {
-        var result = null, outputType = "string";
-        try {
-            if (!type) {
-                throw new Error("No output type specified.");
-            }
-            outputType = type.toLowerCase();
-            var askUnicodeString = outputType === "string" || outputType === "text";
-            if (outputType === "binarystring" || outputType === "text") {
-                outputType = "string";
-            }
-            result = this._decompressWorker();
-
-            var isUnicodeString = !this._dataBinary;
-
-            if (isUnicodeString && !askUnicodeString) {
-                result = result.pipe(new utf8.Utf8EncodeWorker());
-            }
-            if (!isUnicodeString && askUnicodeString) {
-                result = result.pipe(new utf8.Utf8DecodeWorker());
-            }
-        } catch (e) {
-            result = new GenericWorker("error");
-            result.error(e);
-        }
-
-        return new StreamHelper(result, outputType, "");
-    },
-
-    /**
-     * Prepare the content in the asked type.
-     * @param {String} type the type of the result.
-     * @param {Function} onUpdate a function to call on each internal update.
-     * @return Promise the promise of the result.
-     */
-    async: function (type, onUpdate) {
-        return this.internalStream(type).accumulate(onUpdate);
-    },
-
-    /**
-     * Prepare the content as a nodejs stream.
-     * @param {String} type the type of each chunk.
-     * @param {Function} onUpdate a function to call on each internal update.
-     * @return Stream the stream.
-     */
-    nodeStream: function (type, onUpdate) {
-        return this.internalStream(type || "nodebuffer").toNodejsStream(onUpdate);
-    },
-
-    /**
-     * Return a worker for the compressed content.
-     * @private
-     * @param {Object} compression the compression object to use.
-     * @param {Object} compressionOptions the options to use when compressing.
-     * @return Worker the worker.
-     */
-    _compressWorker: function (compression, compressionOptions) {
-        if (
-            this._data instanceof CompressedObject &&
-            this._data.compression.magic === compression.magic
-        ) {
-            return this._data.getCompressedWorker();
-        } else {
-            var result = this._decompressWorker();
-            if(!this._dataBinary) {
-                result = result.pipe(new utf8.Utf8EncodeWorker());
-            }
-            return CompressedObject.createWorkerFrom(result, compression, compressionOptions);
-        }
-    },
-    /**
-     * Return a worker for the decompressed content.
-     * @private
-     * @return Worker the worker.
-     */
-    _decompressWorker : function () {
-        if (this._data instanceof CompressedObject) {
-            return this._data.getContentWorker();
-        } else if (this._data instanceof GenericWorker) {
-            return this._data;
-        } else {
-            return new DataWorker(this._data);
-        }
-    }
-};
-
-var removedMethods = ["asText", "asBinary", "asNodeBuffer", "asUint8Array", "asArrayBuffer"];
-var removedFn = function () {
-    throw new Error("This method has been removed in JSZip 3.0, please check the upgrade guide.");
-};
-
-for(var i = 0; i < removedMethods.length; i++) {
-    ZipObject.prototype[removedMethods[i]] = removedFn;
-}
-module.exports = ZipObject;
-
-
-/***/ }),
-/* 86 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-var compressions = __webpack_require__(40);
-var ZipFileWorker = __webpack_require__(97);
-
-/**
- * Find the compression to use.
- * @param {String} fileCompression the compression defined at the file level, if any.
- * @param {String} zipCompression the compression defined at the load() level.
- * @return {Object} the compression object to use.
- */
-var getCompression = function (fileCompression, zipCompression) {
-
-    var compressionName = fileCompression || zipCompression;
-    var compression = compressions[compressionName];
-    if (!compression) {
-        throw new Error(compressionName + " is not a valid compression method !");
-    }
-    return compression;
-};
-
-/**
- * Create a worker to generate a zip file.
- * @param {JSZip} zip the JSZip instance at the right root level.
- * @param {Object} options to generate the zip file.
- * @param {String} comment the comment to use.
- */
-exports.generateWorker = function (zip, options, comment) {
-
-    var zipFileWorker = new ZipFileWorker(options.streamFiles, comment, options.platform, options.encodeFileName);
-    var entriesCount = 0;
-    try {
-
-        zip.forEach(function (relativePath, file) {
-            entriesCount++;
-            var compression = getCompression(file.options.compression, options.compression);
-            var compressionOptions = file.options.compressionOptions || options.compressionOptions || {};
-            var dir = file.dir, date = file.date;
-
-            file._compressWorker(compression, compressionOptions)
-            .withStreamInfo("file", {
-                name : relativePath,
-                dir : dir,
-                date : date,
-                comment : file.comment || "",
-                unixPermissions : file.unixPermissions,
-                dosPermissions : file.dosPermissions
-            })
-            .pipe(zipFileWorker);
-        });
-        zipFileWorker.entriesCount = entriesCount;
-    } catch (e) {
-        zipFileWorker.error(e);
-    }
-
-    return zipFileWorker;
+module.exports = Array.isArray || function (arr) {
+  return toString.call(arr) == '[object Array]';
 };
 
 
 /***/ }),
-/* 87 */
+/* 30 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 var USE_TYPEDARRAY = (typeof Uint8Array !== 'undefined') && (typeof Uint16Array !== 'undefined') && (typeof Uint32Array !== 'undefined');
 
-var pako = __webpack_require__(88);
-var utils = __webpack_require__(0);
-var GenericWorker = __webpack_require__(1);
-
-var ARRAY_TYPE = USE_TYPEDARRAY ? "uint8array" : "array";
+var pako = __webpack_require__(31);
+exports.uncompressInputType = USE_TYPEDARRAY ? "uint8array" : "array";
+exports.compressInputType = USE_TYPEDARRAY ? "uint8array" : "array";
 
 exports.magic = "\x08\x00";
-
-/**
- * Create a worker that uses pako to inflate/deflate.
- * @constructor
- * @param {String} action the name of the pako function to call : either "Deflate" or "Inflate".
- * @param {Object} options the options to use when (de)compressing.
- */
-function FlateWorker(action, options) {
-    GenericWorker.call(this, "FlateWorker/" + action);
-
-    this._pako = null;
-    this._pakoAction = action;
-    this._pakoOptions = options;
-    // the `meta` object from the last chunk received
-    // this allow this worker to pass around metadata
-    this.meta = {};
-}
-
-utils.inherits(FlateWorker, GenericWorker);
-
-/**
- * @see GenericWorker.processChunk
- */
-FlateWorker.prototype.processChunk = function (chunk) {
-    this.meta = chunk.meta;
-    if (this._pako === null) {
-        this._createPako();
-    }
-    this._pako.push(utils.transformTo(ARRAY_TYPE, chunk.data), false);
-};
-
-/**
- * @see GenericWorker.flush
- */
-FlateWorker.prototype.flush = function () {
-    GenericWorker.prototype.flush.call(this);
-    if (this._pako === null) {
-        this._createPako();
-    }
-    this._pako.push([], true);
-};
-/**
- * @see GenericWorker.cleanUp
- */
-FlateWorker.prototype.cleanUp = function () {
-    GenericWorker.prototype.cleanUp.call(this);
-    this._pako = null;
-};
-
-/**
- * Create the _pako object.
- * TODO: lazy-loading this object isn't the best solution but it's the
- * quickest. The best solution is to lazy-load the worker list. See also the
- * issue #446.
- */
-FlateWorker.prototype._createPako = function () {
-    this._pako = new pako[this._pakoAction]({
-        raw: true,
-        level: this._pakoOptions.level || -1 // default compression
+exports.compress = function(input, compressionOptions) {
+    return pako.deflateRaw(input, {
+        level : compressionOptions.level || -1 // default compression
     });
-    var self = this;
-    this._pako.onData = function(data) {
-        self.push({
-            data : data,
-            meta : self.meta
-        });
-    };
 };
-
-exports.compressWorker = function (compressionOptions) {
-    return new FlateWorker("Deflate", compressionOptions);
-};
-exports.uncompressWorker = function () {
-    return new FlateWorker("Inflate", {});
+exports.uncompress =  function(input) {
+    return pako.inflateRaw(input);
 };
 
 
 /***/ }),
-/* 88 */
+/* 31 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 // Top level file is just a mixin of submodules & constants
 
 
-var assign    = __webpack_require__(5).assign;
+var assign    = __webpack_require__(2).assign;
 
-var deflate   = __webpack_require__(89);
-var inflate   = __webpack_require__(92);
-var constants = __webpack_require__(45);
+var deflate   = __webpack_require__(32);
+var inflate   = __webpack_require__(35);
+var constants = __webpack_require__(14);
 
 var pako = {};
 
@@ -11401,18 +6411,18 @@ module.exports = pako;
 
 
 /***/ }),
-/* 89 */
+/* 32 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 
-var zlib_deflate = __webpack_require__(90);
-var utils        = __webpack_require__(5);
-var strings      = __webpack_require__(43);
-var msg          = __webpack_require__(24);
-var ZStream      = __webpack_require__(44);
+var zlib_deflate = __webpack_require__(33);
+var utils        = __webpack_require__(2);
+var strings      = __webpack_require__(12);
+var msg          = __webpack_require__(7);
+var ZStream      = __webpack_require__(13);
 
 var toString = Object.prototype.toString;
 
@@ -11808,7 +6818,7 @@ exports.gzip = gzip;
 
 
 /***/ }),
-/* 90 */
+/* 33 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -11833,11 +6843,11 @@ exports.gzip = gzip;
 //   misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 
-var utils   = __webpack_require__(5);
-var trees   = __webpack_require__(91);
-var adler32 = __webpack_require__(41);
-var crc32   = __webpack_require__(42);
-var msg     = __webpack_require__(24);
+var utils   = __webpack_require__(2);
+var trees   = __webpack_require__(34);
+var adler32 = __webpack_require__(10);
+var crc32   = __webpack_require__(11);
+var msg     = __webpack_require__(7);
 
 /* Public constants ==========================================================*/
 /* ===========================================================================*/
@@ -13689,7 +8699,7 @@ exports.deflateTune = deflateTune;
 
 
 /***/ }),
-/* 91 */
+/* 34 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -13714,7 +8724,7 @@ exports.deflateTune = deflateTune;
 //   misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 
-var utils = __webpack_require__(5);
+var utils = __webpack_require__(2);
 
 /* Public constants ==========================================================*/
 /* ===========================================================================*/
@@ -14916,20 +9926,20 @@ exports._tr_align = _tr_align;
 
 
 /***/ }),
-/* 92 */
+/* 35 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 
-var zlib_inflate = __webpack_require__(93);
-var utils        = __webpack_require__(5);
-var strings      = __webpack_require__(43);
-var c            = __webpack_require__(45);
-var msg          = __webpack_require__(24);
-var ZStream      = __webpack_require__(44);
-var GZheader     = __webpack_require__(96);
+var zlib_inflate = __webpack_require__(36);
+var utils        = __webpack_require__(2);
+var strings      = __webpack_require__(12);
+var c            = __webpack_require__(14);
+var msg          = __webpack_require__(7);
+var ZStream      = __webpack_require__(13);
+var GZheader     = __webpack_require__(39);
 
 var toString = Object.prototype.toString;
 
@@ -15341,7 +10351,7 @@ exports.ungzip  = inflate;
 
 
 /***/ }),
-/* 93 */
+/* 36 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -15366,11 +10376,11 @@ exports.ungzip  = inflate;
 //   misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 
-var utils         = __webpack_require__(5);
-var adler32       = __webpack_require__(41);
-var crc32         = __webpack_require__(42);
-var inflate_fast  = __webpack_require__(94);
-var inflate_table = __webpack_require__(95);
+var utils         = __webpack_require__(2);
+var adler32       = __webpack_require__(10);
+var crc32         = __webpack_require__(11);
+var inflate_fast  = __webpack_require__(37);
+var inflate_table = __webpack_require__(38);
 
 var CODES = 0;
 var LENS = 1;
@@ -16904,7 +11914,7 @@ exports.inflateUndermine = inflateUndermine;
 
 
 /***/ }),
-/* 94 */
+/* 37 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -17256,7 +12266,7 @@ module.exports = function inflate_fast(strm, start) {
 
 
 /***/ }),
-/* 95 */
+/* 38 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -17281,7 +12291,7 @@ module.exports = function inflate_fast(strm, start) {
 //   misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 
-var utils = __webpack_require__(5);
+var utils = __webpack_require__(2);
 
 var MAXBITS = 15;
 var ENOUGH_LENS = 852;
@@ -17606,7 +12616,7 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
 
 
 /***/ }),
-/* 96 */
+/* 39 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -17671,755 +12681,279 @@ module.exports = GZheader;
 
 
 /***/ }),
-/* 97 */
+/* 40 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 var utils = __webpack_require__(0);
-var GenericWorker = __webpack_require__(1);
-var utf8 = __webpack_require__(7);
-var crc32 = __webpack_require__(23);
-var signature = __webpack_require__(46);
+
+var table = [
+    0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA,
+    0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
+    0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988,
+    0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
+    0x1DB71064, 0x6AB020F2, 0xF3B97148, 0x84BE41DE,
+    0x1ADAD47D, 0x6DDDE4EB, 0xF4D4B551, 0x83D385C7,
+    0x136C9856, 0x646BA8C0, 0xFD62F97A, 0x8A65C9EC,
+    0x14015C4F, 0x63066CD9, 0xFA0F3D63, 0x8D080DF5,
+    0x3B6E20C8, 0x4C69105E, 0xD56041E4, 0xA2677172,
+    0x3C03E4D1, 0x4B04D447, 0xD20D85FD, 0xA50AB56B,
+    0x35B5A8FA, 0x42B2986C, 0xDBBBC9D6, 0xACBCF940,
+    0x32D86CE3, 0x45DF5C75, 0xDCD60DCF, 0xABD13D59,
+    0x26D930AC, 0x51DE003A, 0xC8D75180, 0xBFD06116,
+    0x21B4F4B5, 0x56B3C423, 0xCFBA9599, 0xB8BDA50F,
+    0x2802B89E, 0x5F058808, 0xC60CD9B2, 0xB10BE924,
+    0x2F6F7C87, 0x58684C11, 0xC1611DAB, 0xB6662D3D,
+    0x76DC4190, 0x01DB7106, 0x98D220BC, 0xEFD5102A,
+    0x71B18589, 0x06B6B51F, 0x9FBFE4A5, 0xE8B8D433,
+    0x7807C9A2, 0x0F00F934, 0x9609A88E, 0xE10E9818,
+    0x7F6A0DBB, 0x086D3D2D, 0x91646C97, 0xE6635C01,
+    0x6B6B51F4, 0x1C6C6162, 0x856530D8, 0xF262004E,
+    0x6C0695ED, 0x1B01A57B, 0x8208F4C1, 0xF50FC457,
+    0x65B0D9C6, 0x12B7E950, 0x8BBEB8EA, 0xFCB9887C,
+    0x62DD1DDF, 0x15DA2D49, 0x8CD37CF3, 0xFBD44C65,
+    0x4DB26158, 0x3AB551CE, 0xA3BC0074, 0xD4BB30E2,
+    0x4ADFA541, 0x3DD895D7, 0xA4D1C46D, 0xD3D6F4FB,
+    0x4369E96A, 0x346ED9FC, 0xAD678846, 0xDA60B8D0,
+    0x44042D73, 0x33031DE5, 0xAA0A4C5F, 0xDD0D7CC9,
+    0x5005713C, 0x270241AA, 0xBE0B1010, 0xC90C2086,
+    0x5768B525, 0x206F85B3, 0xB966D409, 0xCE61E49F,
+    0x5EDEF90E, 0x29D9C998, 0xB0D09822, 0xC7D7A8B4,
+    0x59B33D17, 0x2EB40D81, 0xB7BD5C3B, 0xC0BA6CAD,
+    0xEDB88320, 0x9ABFB3B6, 0x03B6E20C, 0x74B1D29A,
+    0xEAD54739, 0x9DD277AF, 0x04DB2615, 0x73DC1683,
+    0xE3630B12, 0x94643B84, 0x0D6D6A3E, 0x7A6A5AA8,
+    0xE40ECF0B, 0x9309FF9D, 0x0A00AE27, 0x7D079EB1,
+    0xF00F9344, 0x8708A3D2, 0x1E01F268, 0x6906C2FE,
+    0xF762575D, 0x806567CB, 0x196C3671, 0x6E6B06E7,
+    0xFED41B76, 0x89D32BE0, 0x10DA7A5A, 0x67DD4ACC,
+    0xF9B9DF6F, 0x8EBEEFF9, 0x17B7BE43, 0x60B08ED5,
+    0xD6D6A3E8, 0xA1D1937E, 0x38D8C2C4, 0x4FDFF252,
+    0xD1BB67F1, 0xA6BC5767, 0x3FB506DD, 0x48B2364B,
+    0xD80D2BDA, 0xAF0A1B4C, 0x36034AF6, 0x41047A60,
+    0xDF60EFC3, 0xA867DF55, 0x316E8EEF, 0x4669BE79,
+    0xCB61B38C, 0xBC66831A, 0x256FD2A0, 0x5268E236,
+    0xCC0C7795, 0xBB0B4703, 0x220216B9, 0x5505262F,
+    0xC5BA3BBE, 0xB2BD0B28, 0x2BB45A92, 0x5CB36A04,
+    0xC2D7FFA7, 0xB5D0CF31, 0x2CD99E8B, 0x5BDEAE1D,
+    0x9B64C2B0, 0xEC63F226, 0x756AA39C, 0x026D930A,
+    0x9C0906A9, 0xEB0E363F, 0x72076785, 0x05005713,
+    0x95BF4A82, 0xE2B87A14, 0x7BB12BAE, 0x0CB61B38,
+    0x92D28E9B, 0xE5D5BE0D, 0x7CDCEFB7, 0x0BDBDF21,
+    0x86D3D2D4, 0xF1D4E242, 0x68DDB3F8, 0x1FDA836E,
+    0x81BE16CD, 0xF6B9265B, 0x6FB077E1, 0x18B74777,
+    0x88085AE6, 0xFF0F6A70, 0x66063BCA, 0x11010B5C,
+    0x8F659EFF, 0xF862AE69, 0x616BFFD3, 0x166CCF45,
+    0xA00AE278, 0xD70DD2EE, 0x4E048354, 0x3903B3C2,
+    0xA7672661, 0xD06016F7, 0x4969474D, 0x3E6E77DB,
+    0xAED16A4A, 0xD9D65ADC, 0x40DF0B66, 0x37D83BF0,
+    0xA9BCAE53, 0xDEBB9EC5, 0x47B2CF7F, 0x30B5FFE9,
+    0xBDBDF21C, 0xCABAC28A, 0x53B39330, 0x24B4A3A6,
+    0xBAD03605, 0xCDD70693, 0x54DE5729, 0x23D967BF,
+    0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94,
+    0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D
+];
 
 /**
- * Transform an integer into a string in hexadecimal.
- * @private
- * @param {number} dec the number to convert.
- * @param {number} bytes the number of bytes to generate.
- * @returns {string} the result.
- */
-var decToHex = function(dec, bytes) {
-    var hex = "", i;
-    for (i = 0; i < bytes; i++) {
-        hex += String.fromCharCode(dec & 0xff);
-        dec = dec >>> 8;
-    }
-    return hex;
-};
-
-/**
- * Generate the UNIX part of the external file attributes.
- * @param {Object} unixPermissions the unix permissions or null.
- * @param {Boolean} isDir true if the entry is a directory, false otherwise.
- * @return {Number} a 32 bit integer.
  *
- * adapted from http://unix.stackexchange.com/questions/14705/the-zip-formats-external-file-attribute :
+ *  Javascript crc32
+ *  http://www.webtoolkit.info/
  *
- * TTTTsstrwxrwxrwx0000000000ADVSHR
- * ^^^^____________________________ file type, see zipinfo.c (UNX_*)
- *     ^^^_________________________ setuid, setgid, sticky
- *        ^^^^^^^^^________________ permissions
- *                 ^^^^^^^^^^______ not used ?
- *                           ^^^^^^ DOS attribute bits : Archive, Directory, Volume label, System file, Hidden, Read only
  */
-var generateUnixExternalFileAttr = function (unixPermissions, isDir) {
-
-    var result = unixPermissions;
-    if (!unixPermissions) {
-        // I can't use octal values in strict mode, hence the hexa.
-        //  040775 => 0x41fd
-        // 0100664 => 0x81b4
-        result = isDir ? 0x41fd : 0x81b4;
+module.exports = function crc32(input, crc) {
+    if (typeof input === "undefined" || !input.length) {
+        return 0;
     }
-    return (result & 0xFFFF) << 16;
+
+    var isArray = utils.getTypeOf(input) !== "string";
+
+    if (typeof(crc) == "undefined") {
+        crc = 0;
+    }
+    var x = 0;
+    var y = 0;
+    var b = 0;
+
+    crc = crc ^ (-1);
+    for (var i = 0, iTop = input.length; i < iTop; i++) {
+        b = isArray ? input[i] : input.charCodeAt(i);
+        y = (crc ^ b) & 0xFF;
+        x = table[y];
+        crc = (crc >>> 8) ^ x;
+    }
+
+    return crc ^ (-1);
 };
-
-/**
- * Generate the DOS part of the external file attributes.
- * @param {Object} dosPermissions the dos permissions or null.
- * @param {Boolean} isDir true if the entry is a directory, false otherwise.
- * @return {Number} a 32 bit integer.
- *
- * Bit 0     Read-Only
- * Bit 1     Hidden
- * Bit 2     System
- * Bit 3     Volume Label
- * Bit 4     Directory
- * Bit 5     Archive
- */
-var generateDosExternalFileAttr = function (dosPermissions, isDir) {
-
-    // the dir flag is already set for compatibility
-    return (dosPermissions || 0)  & 0x3F;
-};
-
-/**
- * Generate the various parts used in the construction of the final zip file.
- * @param {Object} streamInfo the hash with informations about the compressed file.
- * @param {Boolean} streamedContent is the content streamed ?
- * @param {Boolean} streamingEnded is the stream finished ?
- * @param {number} offset the current offset from the start of the zip file.
- * @param {String} platform let's pretend we are this platform (change platform dependents fields)
- * @param {Function} encodeFileName the function to encode the file name / comment.
- * @return {Object} the zip parts.
- */
-var generateZipParts = function(streamInfo, streamedContent, streamingEnded, offset, platform, encodeFileName) {
-    var file = streamInfo['file'],
-    compression = streamInfo['compression'],
-    useCustomEncoding = encodeFileName !== utf8.utf8encode,
-    encodedFileName = utils.transformTo("string", encodeFileName(file.name)),
-    utfEncodedFileName = utils.transformTo("string", utf8.utf8encode(file.name)),
-    comment = file.comment,
-    encodedComment = utils.transformTo("string", encodeFileName(comment)),
-    utfEncodedComment = utils.transformTo("string", utf8.utf8encode(comment)),
-    useUTF8ForFileName = utfEncodedFileName.length !== file.name.length,
-    useUTF8ForComment = utfEncodedComment.length !== comment.length,
-    dosTime,
-    dosDate,
-    extraFields = "",
-    unicodePathExtraField = "",
-    unicodeCommentExtraField = "",
-    dir = file.dir,
-    date = file.date;
-
-
-    var dataInfo = {
-        crc32 : 0,
-        compressedSize : 0,
-        uncompressedSize : 0
-    };
-
-    // if the content is streamed, the sizes/crc32 are only available AFTER
-    // the end of the stream.
-    if (!streamedContent || streamingEnded) {
-        dataInfo.crc32 = streamInfo['crc32'];
-        dataInfo.compressedSize = streamInfo['compressedSize'];
-        dataInfo.uncompressedSize = streamInfo['uncompressedSize'];
-    }
-
-    var bitflag = 0;
-    if (streamedContent) {
-        // Bit 3: the sizes/crc32 are set to zero in the local header.
-        // The correct values are put in the data descriptor immediately
-        // following the compressed data.
-        bitflag |= 0x0008;
-    }
-    if (!useCustomEncoding && (useUTF8ForFileName || useUTF8ForComment)) {
-        // Bit 11: Language encoding flag (EFS).
-        bitflag |= 0x0800;
-    }
-
-
-    var extFileAttr = 0;
-    var versionMadeBy = 0;
-    if (dir) {
-        // dos or unix, we set the dos dir flag
-        extFileAttr |= 0x00010;
-    }
-    if(platform === "UNIX") {
-        versionMadeBy = 0x031E; // UNIX, version 3.0
-        extFileAttr |= generateUnixExternalFileAttr(file.unixPermissions, dir);
-    } else { // DOS or other, fallback to DOS
-        versionMadeBy = 0x0014; // DOS, version 2.0
-        extFileAttr |= generateDosExternalFileAttr(file.dosPermissions, dir);
-    }
-
-    // date
-    // @see http://www.delorie.com/djgpp/doc/rbinter/it/52/13.html
-    // @see http://www.delorie.com/djgpp/doc/rbinter/it/65/16.html
-    // @see http://www.delorie.com/djgpp/doc/rbinter/it/66/16.html
-
-    dosTime = date.getUTCHours();
-    dosTime = dosTime << 6;
-    dosTime = dosTime | date.getUTCMinutes();
-    dosTime = dosTime << 5;
-    dosTime = dosTime | date.getUTCSeconds() / 2;
-
-    dosDate = date.getUTCFullYear() - 1980;
-    dosDate = dosDate << 4;
-    dosDate = dosDate | (date.getUTCMonth() + 1);
-    dosDate = dosDate << 5;
-    dosDate = dosDate | date.getUTCDate();
-
-    if (useUTF8ForFileName) {
-        // set the unicode path extra field. unzip needs at least one extra
-        // field to correctly handle unicode path, so using the path is as good
-        // as any other information. This could improve the situation with
-        // other archive managers too.
-        // This field is usually used without the utf8 flag, with a non
-        // unicode path in the header (winrar, winzip). This helps (a bit)
-        // with the messy Windows' default compressed folders feature but
-        // breaks on p7zip which doesn't seek the unicode path extra field.
-        // So for now, UTF-8 everywhere !
-        unicodePathExtraField =
-            // Version
-            decToHex(1, 1) +
-            // NameCRC32
-            decToHex(crc32(encodedFileName), 4) +
-            // UnicodeName
-            utfEncodedFileName;
-
-        extraFields +=
-            // Info-ZIP Unicode Path Extra Field
-            "\x75\x70" +
-            // size
-            decToHex(unicodePathExtraField.length, 2) +
-            // content
-            unicodePathExtraField;
-    }
-
-    if(useUTF8ForComment) {
-
-        unicodeCommentExtraField =
-            // Version
-            decToHex(1, 1) +
-            // CommentCRC32
-            decToHex(crc32(encodedComment), 4) +
-            // UnicodeName
-            utfEncodedComment;
-
-        extraFields +=
-            // Info-ZIP Unicode Path Extra Field
-            "\x75\x63" +
-            // size
-            decToHex(unicodeCommentExtraField.length, 2) +
-            // content
-            unicodeCommentExtraField;
-    }
-
-    var header = "";
-
-    // version needed to extract
-    header += "\x0A\x00";
-    // general purpose bit flag
-    header += decToHex(bitflag, 2);
-    // compression method
-    header += compression.magic;
-    // last mod file time
-    header += decToHex(dosTime, 2);
-    // last mod file date
-    header += decToHex(dosDate, 2);
-    // crc-32
-    header += decToHex(dataInfo.crc32, 4);
-    // compressed size
-    header += decToHex(dataInfo.compressedSize, 4);
-    // uncompressed size
-    header += decToHex(dataInfo.uncompressedSize, 4);
-    // file name length
-    header += decToHex(encodedFileName.length, 2);
-    // extra field length
-    header += decToHex(extraFields.length, 2);
-
-
-    var fileRecord = signature.LOCAL_FILE_HEADER + header + encodedFileName + extraFields;
-
-    var dirRecord = signature.CENTRAL_FILE_HEADER +
-        // version made by (00: DOS)
-        decToHex(versionMadeBy, 2) +
-        // file header (common to file and central directory)
-        header +
-        // file comment length
-        decToHex(encodedComment.length, 2) +
-        // disk number start
-        "\x00\x00" +
-        // internal file attributes TODO
-        "\x00\x00" +
-        // external file attributes
-        decToHex(extFileAttr, 4) +
-        // relative offset of local header
-        decToHex(offset, 4) +
-        // file name
-        encodedFileName +
-        // extra field
-        extraFields +
-        // file comment
-        encodedComment;
-
-    return {
-        fileRecord: fileRecord,
-        dirRecord: dirRecord
-    };
-};
-
-/**
- * Generate the EOCD record.
- * @param {Number} entriesCount the number of entries in the zip file.
- * @param {Number} centralDirLength the length (in bytes) of the central dir.
- * @param {Number} localDirLength the length (in bytes) of the local dir.
- * @param {String} comment the zip file comment as a binary string.
- * @param {Function} encodeFileName the function to encode the comment.
- * @return {String} the EOCD record.
- */
-var generateCentralDirectoryEnd = function (entriesCount, centralDirLength, localDirLength, comment, encodeFileName) {
-    var dirEnd = "";
-    var encodedComment = utils.transformTo("string", encodeFileName(comment));
-
-    // end of central dir signature
-    dirEnd = signature.CENTRAL_DIRECTORY_END +
-        // number of this disk
-        "\x00\x00" +
-        // number of the disk with the start of the central directory
-        "\x00\x00" +
-        // total number of entries in the central directory on this disk
-        decToHex(entriesCount, 2) +
-        // total number of entries in the central directory
-        decToHex(entriesCount, 2) +
-        // size of the central directory   4 bytes
-        decToHex(centralDirLength, 4) +
-        // offset of start of central directory with respect to the starting disk number
-        decToHex(localDirLength, 4) +
-        // .ZIP file comment length
-        decToHex(encodedComment.length, 2) +
-        // .ZIP file comment
-        encodedComment;
-
-    return dirEnd;
-};
-
-/**
- * Generate data descriptors for a file entry.
- * @param {Object} streamInfo the hash generated by a worker, containing informations
- * on the file entry.
- * @return {String} the data descriptors.
- */
-var generateDataDescriptors = function (streamInfo) {
-    var descriptor = "";
-    descriptor = signature.DATA_DESCRIPTOR +
-        // crc-32                          4 bytes
-        decToHex(streamInfo['crc32'], 4) +
-        // compressed size                 4 bytes
-        decToHex(streamInfo['compressedSize'], 4) +
-        // uncompressed size               4 bytes
-        decToHex(streamInfo['uncompressedSize'], 4);
-
-    return descriptor;
-};
-
-
-/**
- * A worker to concatenate other workers to create a zip file.
- * @param {Boolean} streamFiles `true` to stream the content of the files,
- * `false` to accumulate it.
- * @param {String} comment the comment to use.
- * @param {String} platform the platform to use, "UNIX" or "DOS".
- * @param {Function} encodeFileName the function to encode file names and comments.
- */
-function ZipFileWorker(streamFiles, comment, platform, encodeFileName) {
-    GenericWorker.call(this, "ZipFileWorker");
-    // The number of bytes written so far. This doesn't count accumulated chunks.
-    this.bytesWritten = 0;
-    // The comment of the zip file
-    this.zipComment = comment;
-    // The platform "generating" the zip file.
-    this.zipPlatform = platform;
-    // the function to encode file names and comments.
-    this.encodeFileName = encodeFileName;
-    // Should we stream the content of the files ?
-    this.streamFiles = streamFiles;
-    // If `streamFiles` is false, we will need to accumulate the content of the
-    // files to calculate sizes / crc32 (and write them *before* the content).
-    // This boolean indicates if we are accumulating chunks (it will change a lot
-    // during the lifetime of this worker).
-    this.accumulate = false;
-    // The buffer receiving chunks when accumulating content.
-    this.contentBuffer = [];
-    // The list of generated directory records.
-    this.dirRecords = [];
-    // The offset (in bytes) from the beginning of the zip file for the current source.
-    this.currentSourceOffset = 0;
-    // The total number of entries in this zip file.
-    this.entriesCount = 0;
-    // the name of the file currently being added, null when handling the end of the zip file.
-    // Used for the emited metadata.
-    this.currentFile = null;
-
-
-
-    this._sources = [];
-}
-utils.inherits(ZipFileWorker, GenericWorker);
-
-/**
- * @see GenericWorker.push
- */
-ZipFileWorker.prototype.push = function (chunk) {
-
-    var currentFilePercent = chunk.meta.percent || 0;
-    var entriesCount = this.entriesCount;
-    var remainingFiles = this._sources.length;
-
-    if(this.accumulate) {
-        this.contentBuffer.push(chunk);
-    } else {
-        this.bytesWritten += chunk.data.length;
-
-        GenericWorker.prototype.push.call(this, {
-            data : chunk.data,
-            meta : {
-                currentFile : this.currentFile,
-                percent : entriesCount ? (currentFilePercent + 100 * (entriesCount - remainingFiles - 1)) / entriesCount : 100
-            }
-        });
-    }
-};
-
-/**
- * The worker started a new source (an other worker).
- * @param {Object} streamInfo the streamInfo object from the new source.
- */
-ZipFileWorker.prototype.openedSource = function (streamInfo) {
-    this.currentSourceOffset = this.bytesWritten;
-    this.currentFile = streamInfo['file'].name;
-
-    var streamedContent = this.streamFiles && !streamInfo['file'].dir;
-
-    // don't stream folders (because they don't have any content)
-    if(streamedContent) {
-        var record = generateZipParts(streamInfo, streamedContent, false, this.currentSourceOffset, this.zipPlatform, this.encodeFileName);
-        this.push({
-            data : record.fileRecord,
-            meta : {percent:0}
-        });
-    } else {
-        // we need to wait for the whole file before pushing anything
-        this.accumulate = true;
-    }
-};
-
-/**
- * The worker finished a source (an other worker).
- * @param {Object} streamInfo the streamInfo object from the finished source.
- */
-ZipFileWorker.prototype.closedSource = function (streamInfo) {
-    this.accumulate = false;
-    var streamedContent = this.streamFiles && !streamInfo['file'].dir;
-    var record = generateZipParts(streamInfo, streamedContent, true, this.currentSourceOffset, this.zipPlatform, this.encodeFileName);
-
-    this.dirRecords.push(record.dirRecord);
-    if(streamedContent) {
-        // after the streamed file, we put data descriptors
-        this.push({
-            data : generateDataDescriptors(streamInfo),
-            meta : {percent:100}
-        });
-    } else {
-        // the content wasn't streamed, we need to push everything now
-        // first the file record, then the content
-        this.push({
-            data : record.fileRecord,
-            meta : {percent:0}
-        });
-        while(this.contentBuffer.length) {
-            this.push(this.contentBuffer.shift());
-        }
-    }
-    this.currentFile = null;
-};
-
-/**
- * @see GenericWorker.flush
- */
-ZipFileWorker.prototype.flush = function () {
-
-    var localDirLength = this.bytesWritten;
-    for(var i = 0; i < this.dirRecords.length; i++) {
-        this.push({
-            data : this.dirRecords[i],
-            meta : {percent:100}
-        });
-    }
-    var centralDirLength = this.bytesWritten - localDirLength;
-
-    var dirEnd = generateCentralDirectoryEnd(this.dirRecords.length, centralDirLength, localDirLength, this.zipComment, this.encodeFileName);
-
-    this.push({
-        data : dirEnd,
-        meta : {percent:100}
-    });
-};
-
-/**
- * Prepare the next source to be read.
- */
-ZipFileWorker.prototype.prepareNextSource = function () {
-    this.previous = this._sources.shift();
-    this.openedSource(this.previous.streamInfo);
-    if (this.isPaused) {
-        this.previous.pause();
-    } else {
-        this.previous.resume();
-    }
-};
-
-/**
- * @see GenericWorker.registerPrevious
- */
-ZipFileWorker.prototype.registerPrevious = function (previous) {
-    this._sources.push(previous);
-    var self = this;
-
-    previous.on('data', function (chunk) {
-        self.processChunk(chunk);
-    });
-    previous.on('end', function () {
-        self.closedSource(self.previous.streamInfo);
-        if(self._sources.length) {
-            self.prepareNextSource();
-        } else {
-            self.end();
-        }
-    });
-    previous.on('error', function (e) {
-        self.error(e);
-    });
-    return this;
-};
-
-/**
- * @see GenericWorker.resume
- */
-ZipFileWorker.prototype.resume = function () {
-    if(!GenericWorker.prototype.resume.call(this)) {
-        return false;
-    }
-
-    if (!this.previous && this._sources.length) {
-        this.prepareNextSource();
-        return true;
-    }
-    if (!this.previous && !this._sources.length && !this.generatedError) {
-        this.end();
-        return true;
-    }
-};
-
-/**
- * @see GenericWorker.error
- */
-ZipFileWorker.prototype.error = function (e) {
-    var sources = this._sources;
-    if(!GenericWorker.prototype.error.call(this, e)) {
-        return false;
-    }
-    for(var i = 0; i < sources.length; i++) {
-        try {
-            sources[i].error(e);
-        } catch(e) {
-            // the `error` exploded, nothing to do
-        }
-    }
-    return true;
-};
-
-/**
- * @see GenericWorker.lock
- */
-ZipFileWorker.prototype.lock = function () {
-    GenericWorker.prototype.lock.call(this);
-    var sources = this._sources;
-    for(var i = 0; i < sources.length; i++) {
-        sources[i].lock();
-    }
-};
-
-module.exports = ZipFileWorker;
+// vim: set shiftwidth=4 softtabstop=4:
 
 
 /***/ }),
-/* 98 */
+/* 41 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
 var utils = __webpack_require__(0);
-var GenericWorker = __webpack_require__(1);
 
 /**
- * A worker that use a nodejs stream as source.
+ * An object to write any content to a string.
  * @constructor
- * @param {String} filename the name of the file entry for this stream.
- * @param {Readable} stream the nodejs stream.
  */
-function NodejsStreamInputAdapter(filename, stream) {
-    GenericWorker.call(this, "Nodejs stream input adapter for " + filename);
-    this._upstreamEnded = false;
-    this._bindStream(stream);
-}
-
-utils.inherits(NodejsStreamInputAdapter, GenericWorker);
-
-/**
- * Prepare the stream and bind the callbacks on it.
- * Do this ASAP on node 0.10 ! A lazy binding doesn't always work.
- * @param {Stream} stream the nodejs stream to use.
- */
-NodejsStreamInputAdapter.prototype._bindStream = function (stream) {
-    var self = this;
-    this._stream = stream;
-    stream.pause();
-    stream
-    .on("data", function (chunk) {
-        self.push({
-            data: chunk,
-            meta : {
-                percent : 0
-            }
-        });
-    })
-    .on("error", function (e) {
-        if(self.isPaused) {
-            this.generatedError = e;
-        } else {
-            self.error(e);
-        }
-    })
-    .on("end", function () {
-        if(self.isPaused) {
-            self._upstreamEnded = true;
-        } else {
-            self.end();
-        }
-    });
+var StringWriter = function() {
+    this.data = [];
 };
-NodejsStreamInputAdapter.prototype.pause = function () {
-    if(!GenericWorker.prototype.pause.call(this)) {
-        return false;
+StringWriter.prototype = {
+    /**
+     * Append any content to the current string.
+     * @param {Object} input the content to add.
+     */
+    append: function(input) {
+        input = utils.transformTo("string", input);
+        this.data.push(input);
+    },
+    /**
+     * Finalize the construction an return the result.
+     * @return {string} the generated string.
+     */
+    finalize: function() {
+        return this.data.join("");
     }
-    this._stream.pause();
-    return true;
-};
-NodejsStreamInputAdapter.prototype.resume = function () {
-    if(!GenericWorker.prototype.resume.call(this)) {
-        return false;
-    }
-
-    if(this._upstreamEnded) {
-        this.end();
-    } else {
-        this._stream.resume();
-    }
-
-    return true;
 };
 
-module.exports = NodejsStreamInputAdapter;
+module.exports = StringWriter;
 
 
 /***/ }),
-/* 99 */
+/* 42 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
+
 var utils = __webpack_require__(0);
-var external = __webpack_require__(11);
-var utf8 = __webpack_require__(7);
-var utils = __webpack_require__(0);
-var ZipEntries = __webpack_require__(100);
-var Crc32Probe = __webpack_require__(39);
-var nodejsUtils = __webpack_require__(15);
 
 /**
- * Check the CRC32 of an entry.
- * @param {ZipEntry} zipEntry the zip entry to check.
- * @return {Promise} the result.
+ * An object to write any content to an Uint8Array.
+ * @constructor
+ * @param {number} length The length of the array.
  */
-function checkEntryCRC32(zipEntry) {
-    return new external.Promise(function (resolve, reject) {
-        var worker = zipEntry.decompressed.getContentWorker().pipe(new Crc32Probe());
-        worker.on("error", function (e) {
-            reject(e);
-        })
-        .on("end", function () {
-            if (worker.streamInfo.crc32 !== zipEntry.decompressed.crc32) {
-                reject(new Error("Corrupted zip : CRC32 mismatch"));
-            } else {
-                resolve();
-            }
-        })
-        .resume();
-    });
-}
+var Uint8ArrayWriter = function(length) {
+    this.data = new Uint8Array(length);
+    this.index = 0;
+};
+Uint8ArrayWriter.prototype = {
+    /**
+     * Append any content to the current array.
+     * @param {Object} input the content to add.
+     */
+    append: function(input) {
+        if (input.length !== 0) {
+            // with an empty Uint8Array, Opera fails with a "Offset larger than array size"
+            input = utils.transformTo("uint8array", input);
+            this.data.set(input, this.index);
+            this.index += input.length;
+        }
+    },
+    /**
+     * Finalize the construction an return the result.
+     * @return {Uint8Array} the generated array.
+     */
+    finalize: function() {
+        return this.data;
+    }
+};
 
+module.exports = Uint8ArrayWriter;
+
+
+/***/ }),
+/* 43 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var base64 = __webpack_require__(4);
+var utf8 = __webpack_require__(18);
+var utils = __webpack_require__(0);
+var ZipEntries = __webpack_require__(44);
 module.exports = function(data, options) {
-    var zip = this;
+    var files, zipEntries, i, input;
     options = utils.extend(options || {}, {
         base64: false,
         checkCRC32: false,
-        optimizedBinaryString: false,
+        optimizedBinaryString : false,
         createFolders: false,
         decodeFileName: utf8.utf8decode
     });
-
-    if (nodejsUtils.isNode && nodejsUtils.isStream(data)) {
-        return external.Promise.reject(new Error("JSZip can't accept a stream when loading a zip file."));
+    if (options.base64) {
+        data = base64.decode(data);
     }
 
-    return utils.prepareContent("the loaded zip file", data, true, options.optimizedBinaryString, options.base64)
-    .then(function(data) {
-        var zipEntries = new ZipEntries(options);
-        zipEntries.load(data);
-        return zipEntries;
-    }).then(function checkCRC32(zipEntries) {
-        var promises = [external.Promise.resolve(zipEntries)];
-        var files = zipEntries.files;
-        if (options.checkCRC32) {
-            for (var i = 0; i < files.length; i++) {
-                promises.push(checkEntryCRC32(files[i]));
-            }
-        }
-        return external.Promise.all(promises);
-    }).then(function addFiles(results) {
-        var zipEntries = results.shift();
-        var files = zipEntries.files;
-        for (var i = 0; i < files.length; i++) {
-            var input = files[i];
-            zip.file(input.fileNameStr, input.decompressed, {
-                binary: true,
-                optimizedBinaryString: true,
-                date: input.date,
-                dir: input.dir,
-                comment : input.fileCommentStr.length ? input.fileCommentStr : null,
-                unixPermissions : input.unixPermissions,
-                dosPermissions : input.dosPermissions,
-                createFolders: options.createFolders
-            });
-        }
-        if (zipEntries.zipComment.length) {
-            zip.comment = zipEntries.zipComment;
-        }
+    zipEntries = new ZipEntries(data, options);
+    files = zipEntries.files;
+    for (i = 0; i < files.length; i++) {
+        input = files[i];
+        this.file(input.fileNameStr, input.decompressed, {
+            binary: true,
+            optimizedBinaryString: true,
+            date: input.date,
+            dir: input.dir,
+            comment : input.fileCommentStr.length ? input.fileCommentStr : null,
+            unixPermissions : input.unixPermissions,
+            dosPermissions : input.dosPermissions,
+            createFolders: options.createFolders
+        });
+    }
+    if (zipEntries.zipComment.length) {
+        this.comment = zipEntries.zipComment;
+    }
 
-        return zip;
-    });
+    return this;
 };
 
 
 /***/ }),
-/* 100 */
+/* 44 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
-var readerFor = __webpack_require__(47);
+var StringReader = __webpack_require__(19);
+var NodeBufferReader = __webpack_require__(45);
+var Uint8ArrayReader = __webpack_require__(21);
+var ArrayReader = __webpack_require__(22);
 var utils = __webpack_require__(0);
-var sig = __webpack_require__(46);
-var ZipEntry = __webpack_require__(103);
-var utf8 = __webpack_require__(7);
-var support = __webpack_require__(4);
+var sig = __webpack_require__(15);
+var ZipEntry = __webpack_require__(46);
+var support = __webpack_require__(3);
+var jszipProto = __webpack_require__(5);
 //  class ZipEntries {{{
 /**
  * All the entries in the zip file.
  * @constructor
+ * @param {String|ArrayBuffer|Uint8Array} data the binary stream to load.
  * @param {Object} loadOptions Options for loading the stream.
  */
-function ZipEntries(loadOptions) {
+function ZipEntries(data, loadOptions) {
     this.files = [];
     this.loadOptions = loadOptions;
+    if (data) {
+        this.load(data);
+    }
 }
 ZipEntries.prototype = {
     /**
-     * Check that the reader is on the specified signature.
+     * Check that the reader is on the speficied signature.
      * @param {string} expectedSignature the expected signature.
      * @throws {Error} if it is an other signature.
      */
     checkSignature: function(expectedSignature) {
-        if (!this.reader.readAndCheckSignature(expectedSignature)) {
-            this.reader.index -= 4;
-            var signature = this.reader.readString(4);
-            throw new Error("Corrupted zip or bug: unexpected signature " + "(" + utils.pretty(signature) + ", expected " + utils.pretty(expectedSignature) + ")");
+        var signature = this.reader.readString(4);
+        if (signature !== expectedSignature) {
+            throw new Error("Corrupted zip or bug : unexpected signature " + "(" + utils.pretty(signature) + ", expected " + utils.pretty(expectedSignature) + ")");
         }
     },
     /**
@@ -18466,9 +13000,8 @@ ZipEntries.prototype = {
      */
     readBlockZip64EndOfCentral: function() {
         this.zip64EndOfCentralSize = this.reader.readInt(8);
-        this.reader.skip(4);
-        // this.versionMadeBy = this.reader.readString(2);
-        // this.versionNeeded = this.reader.readInt(2);
+        this.versionMadeBy = this.reader.readString(2);
+        this.versionNeeded = this.reader.readInt(2);
         this.diskNumber = this.reader.readInt(4);
         this.diskWithCentralDirStart = this.reader.readInt(4);
         this.centralDirRecordsOnThisDisk = this.reader.readInt(8);
@@ -18485,7 +13018,7 @@ ZipEntries.prototype = {
         while (index < extraDataSize) {
             extraFieldId = this.reader.readInt(2);
             extraFieldLength = this.reader.readInt(4);
-            extraFieldValue = this.reader.readData(extraFieldLength);
+            extraFieldValue = this.reader.readString(extraFieldLength);
             this.zip64ExtensibleData[extraFieldId] = {
                 id: extraFieldId,
                 length: extraFieldLength,
@@ -18525,7 +13058,7 @@ ZipEntries.prototype = {
         var file;
 
         this.reader.setIndex(this.centralDirOffset);
-        while (this.reader.readAndCheckSignature(sig.CENTRAL_FILE_HEADER)) {
+        while (this.reader.readString(4) === sig.CENTRAL_FILE_HEADER) {
             file = new ZipEntry({
                 zip64: this.zip64
             }, this.loadOptions);
@@ -18560,11 +13093,10 @@ ZipEntries.prototype = {
 
             if (isGarbage) {
                 throw new Error("Can't find end of central directory : is this a zip file ? " +
-                                "If it is, see https://stuk.github.io/jszip/documentation/howto/read_zip.html");
+                                "If it is, see http://stuk.github.io/jszip/documentation/howto/read_zip.html");
             } else {
-                throw new Error("Corrupted zip: can't find end of central directory");
+                throw new Error("Corrupted zip : can't find end of central directory");
             }
-
         }
         this.reader.setIndex(offset);
         var endOfCentralDirOffset = offset;
@@ -18587,7 +13119,7 @@ ZipEntries.prototype = {
 
             /*
             Warning : the zip64 extension is supported, but ONLY if the 64bits integer read from
-            the zip file can fit into a 32bits integer. This cannot be solved : JavaScript represents
+            the zip file can fit into a 32bits integer. This cannot be solved : Javascript represents
             all numbers as 64-bit double precision IEEE 754 floating point numbers.
             So, we have 53bits for integers and bitwise operations treat everything as 32bits.
             see https://developer.mozilla.org/en-US/docs/JavaScript/Reference/Operators/Bitwise_Operators
@@ -18597,7 +13129,7 @@ ZipEntries.prototype = {
             // should look for a zip64 EOCD locator
             offset = this.reader.lastIndexOfSignature(sig.ZIP64_CENTRAL_DIRECTORY_LOCATOR);
             if (offset < 0) {
-                throw new Error("Corrupted zip: can't find the ZIP64 end of central directory locator");
+                throw new Error("Corrupted zip : can't find the ZIP64 end of central directory locator");
             }
             this.reader.setIndex(offset);
             this.checkSignature(sig.ZIP64_CENTRAL_DIRECTORY_LOCATOR);
@@ -18608,7 +13140,7 @@ ZipEntries.prototype = {
                 // console.warn("ZIP64 end of central directory not where expected.");
                 this.relativeOffsetEndOfZip64CentralDir = this.reader.lastIndexOfSignature(sig.ZIP64_CENTRAL_DIRECTORY_END);
                 if (this.relativeOffsetEndOfZip64CentralDir < 0) {
-                    throw new Error("Corrupted zip: can't find the ZIP64 end of central directory");
+                    throw new Error("Corrupted zip : can't find the ZIP64 end of central directory");
                 }
             }
             this.reader.setIndex(this.relativeOffsetEndOfZip64CentralDir);
@@ -18639,7 +13171,21 @@ ZipEntries.prototype = {
         }
     },
     prepareReader: function(data) {
-        this.reader = readerFor(data);
+        var type = utils.getTypeOf(data);
+        utils.checkSupport(type);
+        if (type === "string" && !support.uint8array) {
+            this.reader = new StringReader(data, this.loadOptions.optimizedBinaryString);
+        }
+        else if (type === "nodebuffer") {
+            this.reader = new NodeBufferReader(data);
+        }
+        else if (support.uint8array) {
+            this.reader = new Uint8ArrayReader(utils.transformTo("uint8array", data));
+        } else if (support.array) {
+            this.reader = new ArrayReader(utils.transformTo("array", data));
+        } else {
+            throw new Error("Unexpected error: unsupported type '" + type + "'");
+        }
     },
     /**
      * Read a zip file and create ZipEntries.
@@ -18657,63 +13203,20 @@ module.exports = ZipEntries;
 
 
 /***/ }),
-/* 101 */
+/* 45 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
-var DataReader = __webpack_require__(49);
-var utils = __webpack_require__(0);
-
-function StringReader(data) {
-    DataReader.call(this, data);
-}
-utils.inherits(StringReader, DataReader);
-/**
- * @see DataReader.byteAt
- */
-StringReader.prototype.byteAt = function(i) {
-    return this.data.charCodeAt(this.zero + i);
-};
-/**
- * @see DataReader.lastIndexOfSignature
- */
-StringReader.prototype.lastIndexOfSignature = function(sig) {
-    return this.data.lastIndexOf(sig) - this.zero;
-};
-/**
- * @see DataReader.readAndCheckSignature
- */
-StringReader.prototype.readAndCheckSignature = function (sig) {
-    var data = this.readData(4);
-    return sig === data;
-};
-/**
- * @see DataReader.readData
- */
-StringReader.prototype.readData = function(size) {
-    this.checkOffset(size);
-    // this will work because the constructor applied the "& 0xff" mask.
-    var result = this.data.slice(this.zero + this.index, this.zero + this.index + size);
-    this.index += size;
-    return result;
-};
-module.exports = StringReader;
-
-
-/***/ }),
-/* 102 */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-var Uint8ArrayReader = __webpack_require__(50);
-var utils = __webpack_require__(0);
+var Uint8ArrayReader = __webpack_require__(21);
 
 function NodeBufferReader(data) {
-    Uint8ArrayReader.call(this, data);
+    this.data = data;
+    this.length = this.data.length;
+    this.index = 0;
+    this.zero = 0;
 }
-utils.inherits(NodeBufferReader, Uint8ArrayReader);
+NodeBufferReader.prototype = new Uint8ArrayReader();
 
 /**
  * @see DataReader.readData
@@ -18728,38 +13231,19 @@ module.exports = NodeBufferReader;
 
 
 /***/ }),
-/* 103 */
+/* 46 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
-var readerFor = __webpack_require__(47);
+var StringReader = __webpack_require__(19);
 var utils = __webpack_require__(0);
-var CompressedObject = __webpack_require__(22);
-var crc32fn = __webpack_require__(23);
-var utf8 = __webpack_require__(7);
-var compressions = __webpack_require__(40);
-var support = __webpack_require__(4);
+var CompressedObject = __webpack_require__(17);
+var jszipProto = __webpack_require__(5);
+var support = __webpack_require__(3);
 
 var MADE_BY_DOS = 0x00;
 var MADE_BY_UNIX = 0x03;
-
-/**
- * Find a compression registered in JSZip.
- * @param {string} compressionMethod the method magic to find.
- * @return {Object|null} the JSZip compression object, null if none found.
- */
-var findCompression = function(compressionMethod) {
-    for (var method in compressions) {
-        if (!compressions.hasOwnProperty(method)) {
-            continue;
-        }
-        if (compressions[method].magic === compressionMethod) {
-            return compressions[method];
-        }
-    }
-    return null;
-};
 
 // class ZipEntry {{{
 /**
@@ -18790,6 +13274,45 @@ ZipEntry.prototype = {
         return (this.bitFlag & 0x0800) === 0x0800;
     },
     /**
+     * Prepare the function used to generate the compressed content from this ZipFile.
+     * @param {DataReader} reader the reader to use.
+     * @param {number} from the offset from where we should read the data.
+     * @param {number} length the length of the data to read.
+     * @return {Function} the callback to get the compressed content (the type depends of the DataReader class).
+     */
+    prepareCompressedContent: function(reader, from, length) {
+        return function() {
+            var previousIndex = reader.index;
+            reader.setIndex(from);
+            var compressedFileData = reader.readData(length);
+            reader.setIndex(previousIndex);
+
+            return compressedFileData;
+        };
+    },
+    /**
+     * Prepare the function used to generate the uncompressed content from this ZipFile.
+     * @param {DataReader} reader the reader to use.
+     * @param {number} from the offset from where we should read the data.
+     * @param {number} length the length of the data to read.
+     * @param {JSZip.compression} compression the compression used on this file.
+     * @param {number} uncompressedSize the uncompressed size to expect.
+     * @return {Function} the callback to get the uncompressed content (the type depends of the DataReader class).
+     */
+    prepareContent: function(reader, from, length, compression, uncompressedSize) {
+        return function() {
+
+            var compressedFileData = utils.transformTo(compression.uncompressInputType, this.getCompressedContent());
+            var uncompressedFileData = compression.uncompress(compressedFileData);
+
+            if (uncompressedFileData.length !== uncompressedSize) {
+                throw new Error("Bug : uncompressed data size mismatch");
+            }
+
+            return uncompressedFileData;
+        };
+    },
+    /**
      * Read the local part of a zip file and add the info in this object.
      * @param {DataReader} reader the reader to use.
      */
@@ -18815,19 +13338,32 @@ ZipEntry.prototype = {
         // Unfortunately, this lead also to some issues : http://seclists.org/fulldisclosure/2009/Sep/394
         this.fileNameLength = reader.readInt(2);
         localExtraFieldsLength = reader.readInt(2); // can't be sure this will be the same as the central dir
-        // the fileName is stored as binary data, the handleUTF8 method will take care of the encoding.
         this.fileName = reader.readData(this.fileNameLength);
         reader.skip(localExtraFieldsLength);
 
-        if (this.compressedSize === -1 || this.uncompressedSize === -1) {
-            throw new Error("Bug or corrupted zip : didn't get enough informations from the central directory " + "(compressedSize === -1 || uncompressedSize === -1)");
+        if (this.compressedSize == -1 || this.uncompressedSize == -1) {
+            throw new Error("Bug or corrupted zip : didn't get enough informations from the central directory " + "(compressedSize == -1 || uncompressedSize == -1)");
         }
 
-        compression = findCompression(this.compressionMethod);
+        compression = utils.findCompression(this.compressionMethod);
         if (compression === null) { // no compression found
-            throw new Error("Corrupted zip : compression " + utils.pretty(this.compressionMethod) + " unknown (inner file : " + utils.transformTo("string", this.fileName) + ")");
+            throw new Error("Corrupted zip : compression " + utils.pretty(this.compressionMethod) + " unknown (inner file : " +  utils.transformTo("string", this.fileName) + ")");
         }
-        this.decompressed = new CompressedObject(this.compressedSize, this.uncompressedSize, this.crc32, compression, reader.readData(this.compressedSize));
+        this.decompressed = new CompressedObject();
+        this.decompressed.compressedSize = this.compressedSize;
+        this.decompressed.uncompressedSize = this.uncompressedSize;
+        this.decompressed.crc32 = this.crc32;
+        this.decompressed.compressionMethod = this.compressionMethod;
+        this.decompressed.getCompressedContent = this.prepareCompressedContent(reader, reader.index, this.compressedSize, compression);
+        this.decompressed.getContent = this.prepareContent(reader, reader.index, this.compressedSize, compression, this.uncompressedSize);
+
+        // we need to compute the crc32...
+        if (this.loadOptions.checkCRC32) {
+            this.decompressed = utils.transformTo("string", this.decompressed.getContent());
+            if (jszipProto.crc32(this.decompressed) !== this.crc32) {
+                throw new Error("Corrupted zip : CRC32 mismatch");
+            }
+        }
     },
 
     /**
@@ -18836,15 +13372,14 @@ ZipEntry.prototype = {
      */
     readCentralPart: function(reader) {
         this.versionMadeBy = reader.readInt(2);
-        reader.skip(2);
-        // this.versionNeeded = reader.readInt(2);
+        this.versionNeeded = reader.readInt(2);
         this.bitFlag = reader.readInt(2);
         this.compressionMethod = reader.readString(2);
         this.date = reader.readDate();
         this.crc32 = reader.readInt(4);
         this.compressedSize = reader.readInt(4);
         this.uncompressedSize = reader.readInt(4);
-        var fileNameLength = reader.readInt(2);
+        this.fileNameLength = reader.readInt(2);
         this.extraFieldsLength = reader.readInt(2);
         this.fileCommentLength = reader.readInt(2);
         this.diskNumberStart = reader.readInt(2);
@@ -18856,8 +13391,7 @@ ZipEntry.prototype = {
             throw new Error("Encrypted zip are not supported");
         }
 
-        // will be read in the local part, see the comments there
-        reader.skip(fileNameLength);
+        this.fileName = reader.readData(this.fileNameLength);
         this.readExtraFields(reader);
         this.parseZIP64ExtraField(reader);
         this.fileComment = reader.readData(this.fileCommentLength);
@@ -18903,7 +13437,7 @@ ZipEntry.prototype = {
         }
 
         // should be something, preparing the extra reader
-        var extraReader = readerFor(this.extraFields[0x0001].value);
+        var extraReader = new StringReader(this.extraFields[0x0001].value);
 
         // I really hope that these 64bits integer can fit in 32 bits integer, because js
         // won't let us have more.
@@ -18925,19 +13459,17 @@ ZipEntry.prototype = {
      * @param {DataReader} reader the reader to use.
      */
     readExtraFields: function(reader) {
-        var end = reader.index + this.extraFieldsLength,
+        var start = reader.index,
             extraFieldId,
             extraFieldLength,
             extraFieldValue;
 
-        if (!this.extraFields) {
-            this.extraFields = {};
-        }
+        this.extraFields = this.extraFields || {};
 
-        while (reader.index < end) {
+        while (reader.index < start + this.extraFieldsLength) {
             extraFieldId = reader.readInt(2);
             extraFieldLength = reader.readInt(2);
-            extraFieldValue = reader.readData(extraFieldLength);
+            extraFieldValue = reader.readString(extraFieldLength);
 
             this.extraFields[extraFieldId] = {
                 id: extraFieldId,
@@ -18952,14 +13484,13 @@ ZipEntry.prototype = {
     handleUTF8: function() {
         var decodeParamType = support.uint8array ? "uint8array" : "array";
         if (this.useUTF8()) {
-            this.fileNameStr = utf8.utf8decode(this.fileName);
-            this.fileCommentStr = utf8.utf8decode(this.fileComment);
+            this.fileNameStr = jszipProto.utf8decode(this.fileName);
+            this.fileCommentStr = jszipProto.utf8decode(this.fileComment);
         } else {
             var upath = this.findExtraFieldUnicodePath();
             if (upath !== null) {
                 this.fileNameStr = upath;
             } else {
-                // ASCII text or unsupported code page
                 var fileNameByteArray =  utils.transformTo(decodeParamType, this.fileName);
                 this.fileNameStr = this.loadOptions.decodeFileName(fileNameByteArray);
             }
@@ -18968,7 +13499,6 @@ ZipEntry.prototype = {
             if (ucomment !== null) {
                 this.fileCommentStr = ucomment;
             } else {
-                // ASCII text or unsupported code page
                 var commentByteArray =  utils.transformTo(decodeParamType, this.fileComment);
                 this.fileCommentStr = this.loadOptions.decodeFileName(commentByteArray);
             }
@@ -18982,7 +13512,7 @@ ZipEntry.prototype = {
     findExtraFieldUnicodePath: function() {
         var upathField = this.extraFields[0x7075];
         if (upathField) {
-            var extraReader = readerFor(upathField.value);
+            var extraReader = new StringReader(upathField.value);
 
             // wrong version
             if (extraReader.readInt(1) !== 1) {
@@ -18990,11 +13520,11 @@ ZipEntry.prototype = {
             }
 
             // the crc of the filename changed, this field is out of date.
-            if (crc32fn(this.fileName) !== extraReader.readInt(4)) {
+            if (jszipProto.crc32(this.fileName) !== extraReader.readInt(4)) {
                 return null;
             }
 
-            return utf8.utf8decode(extraReader.readData(upathField.length - 5));
+            return jszipProto.utf8decode(extraReader.readString(upathField.length - 5));
         }
         return null;
     },
@@ -19006,7 +13536,7 @@ ZipEntry.prototype = {
     findExtraFieldUnicodeComment: function() {
         var ucommentField = this.extraFields[0x6375];
         if (ucommentField) {
-            var extraReader = readerFor(ucommentField.value);
+            var extraReader = new StringReader(ucommentField.value);
 
             // wrong version
             if (extraReader.readInt(1) !== 1) {
@@ -19014,11 +13544,11 @@ ZipEntry.prototype = {
             }
 
             // the crc of the comment changed, this field is out of date.
-            if (crc32fn(this.fileComment) !== extraReader.readInt(4)) {
+            if (jszipProto.crc32(this.fileComment) !== extraReader.readInt(4)) {
                 return null;
             }
 
-            return utf8.utf8decode(extraReader.readData(ucommentField.length - 5));
+            return jszipProto.utf8decode(extraReader.readString(ucommentField.length - 5));
         }
         return null;
     }
@@ -19027,7 +13557,119 @@ module.exports = ZipEntry;
 
 
 /***/ }),
-/* 104 */
+/* 47 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+var utils = __webpack_require__(0);
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.string2binary = function(str) {
+    return utils.string2binary(str);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.string2Uint8Array = function(str) {
+    return utils.transformTo("uint8array", str);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.uint8Array2String = function(array) {
+    return utils.transformTo("string", array);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.string2Blob = function(str) {
+    var buffer = utils.transformTo("arraybuffer", str);
+    return utils.arrayBuffer2Blob(buffer);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.arrayBuffer2Blob = function(buffer) {
+    return utils.arrayBuffer2Blob(buffer);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.transformTo = function(outputType, input) {
+    return utils.transformTo(outputType, input);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.getTypeOf = function(input) {
+    return utils.getTypeOf(input);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.checkSupport = function(type) {
+    return utils.checkSupport(type);
+};
+
+/**
+ * @deprecated
+ * This value will be removed in a future version without replacement.
+ */
+exports.MAX_VALUE_16BITS = utils.MAX_VALUE_16BITS;
+
+/**
+ * @deprecated
+ * This value will be removed in a future version without replacement.
+ */
+exports.MAX_VALUE_32BITS = utils.MAX_VALUE_32BITS;
+
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.pretty = function(str) {
+    return utils.pretty(str);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.findCompression = function(compressionMethod) {
+    return utils.findCompression(compressionMethod);
+};
+
+/**
+ * @deprecated
+ * This function will be removed in a future version without replacement.
+ */
+exports.isRegExp = function (object) {
+    return utils.isRegExp(object);
+};
+
+
+
+/***/ }),
+/* 48 */
 /***/ (function(module, exports) {
 
 //[4]   	NameStartChar	   ::=   	":" | [A-Z] | "_" | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] | [#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF] | [#x200C-#x200D] | [#x2070-#x218F] | [#x2C00-#x2FEF] | [#x3001-#xD7FF] | [#xF900-#xFDCF] | [#xFDF0-#xFFFD] | [#x10000-#xEFFFF]
@@ -19666,14 +14308,14 @@ exports.XMLReader = XMLReader;
 
 
 /***/ }),
-/* 105 */
+/* 49 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var XMLSerializer = __webpack_require__(2).XMLSerializer;
-var DOMParser = __webpack_require__(2).DOMParser;
+var XMLSerializer = __webpack_require__(1).XMLSerializer;
+var DOMParser = __webpack_require__(1).DOMParser;
 
 var prepareStyles = function prepareStyles(files, style) {
     // var self = this;
@@ -19773,14 +14415,14 @@ module.exports = {
 };
 
 /***/ }),
-/* 106 */
+/* 50 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var XMLSerializer = __webpack_require__(2).XMLSerializer;
-var DOMParser = __webpack_require__(2).DOMParser;
+var XMLSerializer = __webpack_require__(1).XMLSerializer;
+var DOMParser = __webpack_require__(1).DOMParser;
 
 var prepareMediaFiles = function prepareMediaFiles(files, media) {
 
@@ -19867,14 +14509,14 @@ module.exports = {
 };
 
 /***/ }),
-/* 107 */
+/* 51 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var XMLSerializer = __webpack_require__(2).XMLSerializer;
-var DOMParser = __webpack_require__(2).DOMParser;
+var XMLSerializer = __webpack_require__(1).XMLSerializer;
+var DOMParser = __webpack_require__(1).DOMParser;
 
 var mergeContentTypes = function mergeContentTypes(files, _contentTypes) {
 
@@ -19956,14 +14598,14 @@ module.exports = {
 };
 
 /***/ }),
-/* 108 */
+/* 52 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
 
 
-var XMLSerializer = __webpack_require__(2).XMLSerializer;
-var DOMParser = __webpack_require__(2).DOMParser;
+var XMLSerializer = __webpack_require__(1).XMLSerializer;
+var DOMParser = __webpack_require__(1).DOMParser;
 
 var prepareNumbering = function prepareNumbering(files) {
 
